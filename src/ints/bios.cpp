@@ -1534,18 +1534,18 @@ void BIOS_SetComPorts(uint16_t baseaddr[]) {
 	BIOS_SetEquipment(equipmentword);
 }
 
+static BIOS* bios;
 
-static BIOS* test;
-
-void BIOS_Destroy(Section* /*sec*/){
-	delete test;
+void BIOS_Destroy([[maybe_unused]] Section* sec)
+{
+	delete bios;
 }
 
 void BIOS_Init(Section* sec)
 {
 	assert(sec);
 
-	test = new BIOS(sec);
+	bios = new BIOS(sec);
 
 	constexpr auto changeable_at_runtime = false;
 	sec->AddDestroyHandler(BIOS_Destroy, changeable_at_runtime);

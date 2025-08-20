@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText:  2002-2021 The DOSBox Team
+// SPDX-FileCopyrightText:  2002-2025 The DOSBox Team
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include "joystick.h"
@@ -8,10 +8,12 @@
 #include <cstring>
 
 #include "config/config.h"
+#include "config/setup.h"
 #include "gui/mapper.h"
 #include "hardware/pic.h"
 #include "hardware/port.h"
 #include "utils/math_utils.h"
+
 //TODO: higher axis can't be mapped. Find out why again
 
 //Set to true, to enable automated switching back to square on circle mode if the inputs are outside the cirle.
@@ -596,19 +598,25 @@ public:
 	}
 };
 
-static JOYSTICK* test;
+static JOYSTICK* joystick;
 
 void JOYSTICK_Destroy([[maybe_unused]] Section *sec)
 {
-	delete test;
+	delete joystick;
 }
 
 void JOYSTICK_Init(Section* sec)
 {
 	assert(sec);
 
-	test = new JOYSTICK(sec);
+	joystick = new JOYSTICK(sec);
 
 	constexpr auto changeable_at_runtime = true;
 	sec->AddDestroyHandler(JOYSTICK_Destroy, changeable_at_runtime); 
+}
+
+void JOYSTICK_Update(Section* sec, const std::string& prop_name)
+{
+	delete joystick;
+	joystick = new JOYSTICK(sec);
 }
