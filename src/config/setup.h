@@ -333,6 +333,7 @@ public:
 #define NO_SUCH_PROPERTY "PROP_NOT_EXIST"
 
 using SectionInitHandler = std::function<void(Section*)>;
+using SectionUpdateHandler = std::function<void(Section*, const std::string& prop_name)>;
 
 class Section {
 private:
@@ -351,6 +352,8 @@ private:
 
 	std::deque<Function_wrapper> init_handlers    = {};
 	std::deque<Function_wrapper> destroy_handlers = {};
+	std::vector<SectionUpdateHandler> update_handlers = {};
+
 	std::string sectionname                       = {};
 	bool active                                   = true;
 
@@ -371,10 +374,18 @@ public:
 	void AddInitHandler(SectionInitHandler init_handler,
 	                    bool changeable_at_runtime = false);
 
+	void AddUpdateHandler(SectionUpdateHandler update_handler);
+
 	void AddDestroyHandler(SectionInitHandler destroy_handler,
 	                       bool changeable_at_runtime = false);
 
+	// TODO This is temporary and will be removed a few commits later once
+	// the `changeable_at_runtime` concept is removed from the section
+	// init/destroy handling.
+	bool IsChangeableAtRuntime();
+
 	void ExecuteInit(bool initall = true);
+	void ExecuteUpdate(const Property& property);
 	void ExecuteDestroy(bool destroyall = true);
 
 	bool IsActive() const
