@@ -489,4 +489,7 @@ private:
 	CSerial *sclass = nullptr;
 };
 
+void SERIAL_Init(Section* sec);
+void SERIAL_Update(Section* sec, const std::string prop_name);
+
 #endif

@@ -34,6 +34,7 @@
 #include "hardware/pic.h"
 #include "hardware/port.h"
 #include "hardware/reelmagic/reelmagic.h"
+#include "hardware/serialport/serialport.h"
 #include "hardware/timer.h"
 #include "hardware/video/voodoo.h"
 #include "ints/int10.h"
@@ -66,7 +67,6 @@ void PCSPEAKER_Init(Section*);
 void TANDYSOUND_Init(Section*);
 void LPT_DAC_Init(Section *);
 void PS1AUDIO_Init(Section *);
-void SERIAL_Init(Section*);
 
 #if C_IPX
 void IPX_Init(Section*);
@@ -1082,8 +1082,9 @@ static void add_serial_section()
 {
 	using enum Property::Changeable::Value;
 
-	constexpr auto changeable_at_runtime = true;
-	auto secprop = control->AddSection("serial", SERIAL_Init, changeable_at_runtime);
+	auto secprop = control->AddSection("serial", SERIAL_Init);
+	secprop->AddUpdateHandler(SERIAL_Update);
+
 	const std::vector<std::string> serials = {
 	        "dummy", "disabled", "mouse", "modem", "nullmodem", "direct"};
 
