@@ -594,15 +594,18 @@ static void DOSBOX_RealInit(Section* sec)
 	}
 }
 
-static void DOSBOX_ConfigChanged(Section* sec)
+static void dosbox_init(Section* sec)
 {
-	static bool first_time = true;
-	if (first_time) {
-		first_time = false;
-		DOSBOX_RealInit(sec);
-	}
-
+	DOSBOX_RealInit(sec);
 	MSG_LoadMessages();
+}
+
+static void dosbox_update([[maybe_unused]] Section* sec,
+                          [[maybe_unused]] const std::string prop_name)
+{
+	if (prop_name == "language") {
+		MSG_LoadMessages();
+	}
 }
 
 // Returns decimal seconds of elapsed uptime.
@@ -634,9 +637,8 @@ void DOSBOX_InitAllModuleConfigsAndMessages()
 
 	/* Setup all the different modules making up DOSBox */
 
-	secprop = control->AddSection("dosbox",
-	                              DOSBOX_ConfigChanged,
-	                              changeable_at_runtime);
+	secprop = control->AddSection("dosbox", dosbox_init);
+	secprop->AddUpdateHandler(dosbox_update);
 
 	pstring = secprop->AddString("language", always, "auto");
 	pstring->SetHelp(
