@@ -56,27 +56,12 @@ void PAGING_Init(Section *);
 void IO_Init(Section * );
 void CALLBACK_Init(Section*);
 //void CREDITS_Init(Section*);
-void VGA_Init(Section*);
 
 void DOS_Init(Section*);
 
-
-void CPU_Init(Section*);
-
-#if C_FPU
-void FPU_Init(Section*);
-#endif
-
-void DMA_Init(Section*);
-
-void PCI_Init(Section*);
 void VIRTUALBOX_Init(Section*);
 void VMWARE_Init(Section*);
 
-//TODO This should setup INT 16 too but ok ;)
-void KEYBOARD_Init(Section*);
-
-void SBLASTER_Init(Section*);
 void PCSPEAKER_Init(Section*);
 void TANDYSOUND_Init(Section*);
 void LPT_DAC_Init(Section *);
@@ -86,8 +71,6 @@ void SERIAL_Init(Section*);
 #if C_IPX
 void IPX_Init(Section*);
 #endif
-
-void SID_Init(Section* sec);
 
 void PIC_Init(Section*);
 void TIMER_Init(Section*);
@@ -891,14 +874,6 @@ void DOSBOX_InitAllModuleConfigsAndMessages()
 
 	// Configure CPU settings
 	CPU_AddConfigSection(control);
-
-#if C_FPU
-	secprop->AddInitHandler(FPU_Init);
-#endif
-	secprop->AddInitHandler(DMA_Init);
-	secprop->AddInitHandler(VGA_Init);
-	secprop->AddInitHandler(KEYBOARD_Init);
-	secprop->AddInitHandler(PCI_Init); // PCI bus
 
 	// Configure 3dfx Voodoo settings
 	VOODOO_AddConfigSection(control);
