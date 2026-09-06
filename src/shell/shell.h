@@ -141,6 +141,7 @@ public:
 
 	/* Commands */
 	void CMD_HELP(char* args);
+	void CMD_CHCP(char* args);
 	void CMD_CLS(char* args);
 	void CMD_COPY(char* args);
 	void CMD_DATE(char* args);
@@ -176,9 +177,6 @@ public:
 	bool echo = true;
 };
 
-std::tuple<std::string, std::string, std::string, bool> parse_drive_conf(
-        std::string drive_letter, const std_fs::path& conf_path);
-
 std::string to_search_pattern(const char* arg);
 
 // Localized output
@@ -189,5 +187,8 @@ char* format_time(const uint8_t hour, const uint8_t min, const uint8_t sec,
 std::string format_number(const size_t num);
 
 std::string shorten_path(const std::string& path, const size_t max_len);
+
+void SHELL_InitAndRun();
+bool SHELL_IsRunning();
 
 #endif

@@ -1,12 +1,18 @@
+// SPDX-FileCopyrightText:  2025-2026 The DOSBox Staging Team
 // SPDX-FileCopyrightText:  2002-2021 The DOSBox Team
 // SPDX-License-Identifier: GPL-2.0-or-later
 
-#include "dos_inc.h"
+#ifndef DOSBOX_DOS_CON_H
+#define DOSBOX_DOS_CON_H
+
+#include "dos.h"
 
 #include <cstring>
 
-#include "utils/ascii.h"
+#include "dos/dos_windows.h"
+#include "ints/bios.h"
 #include "ints/int10.h"
+#include "utils/ascii.h"
 
 #define NUMBER_ANSI_DATA 10
 
@@ -66,7 +72,7 @@ bool device_CON::Read(uint8_t* data, uint16_t* size)
 	uint16_t oldax = reg_ax;
 	uint16_t count = 0;
 	INT10_SetCurMode();
-	if ((readcache) && (*size)) {
+	if (readcache && *size) {
 		data[count++] = readcache;
 		if (dos.echo) {
 			INT10_TeletypeOutputViaInterrupt(readcache, 7);
@@ -74,9 +80,26 @@ bool device_CON::Read(uint8_t* data, uint16_t* size)
 		readcache = 0;
 	}
 	while (*size > count) {
-		reg_ah = is_machine_ega_or_better() ? 0x10 : 0x0;
+		// If running under guest Windows, check if any key is ready;
+		// until then keep releasing our time slice - this allows the
+		// guest Windows to do more processing while we are waiting.
+		// Do not do this if Windows is not running - that would negate
+		// the benefit of running the HLT instruction by our BIOS.
+		if (WINDOWS_IsStarted()) {
+			while (true) {
+				reg_ah = is_machine_ega_or_better() ? 0x11 : 0x1;
+				CALLBACK_RunRealInt(0x16);
+				if (!(cpu_regs.flags & FLAG_ZF)) {
+					break;
+				}
+				WINDOWS_ReleaseTimeSlice();
+			}
+		}
 
+		// Read the key from the buffer
+		reg_ah = is_machine_ega_or_better() ? 0x10 : 0x0;
 		CALLBACK_RunRealInt(0x16);
+
 		switch (reg_al) {
 		case Ascii::CarriageReturn:
 			data[count++] = Ascii::CarriageReturn;
@@ -535,3 +558,5 @@ void device_CON::Output(uint8_t chr)
 		INT10_TeletypeOutputViaInterrupt(chr, 7);
 	}
 }
+
+#endif // DOSBOX_DOS_CON_H

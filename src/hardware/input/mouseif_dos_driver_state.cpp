@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText:  2025-2025 The DOSBox Staging Team
+// SPDX-FileCopyrightText:  2025-2026 The DOSBox Staging Team
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include "private/mouseif_dos_driver_state.h"
@@ -573,24 +573,44 @@ void MouseDriverState::SetLastWheelMovedY(const uint16_t value)
 	SET_UINT16(last_wheel_moved_y, value);
 }
 
-float MouseDriverState::GetMickeyCounterX() const
+float MouseDriverState::GetPreciseMickeyCounterX() const
 {
-	return GET_FLOAT(mickey_counter_x);
+	return GET_FLOAT(precise_mickey_counter_x);
 }
 
-float MouseDriverState::GetMickeyCounterY() const
+float MouseDriverState::GetPreciseMickeyCounterY() const
 {
-	return GET_FLOAT(mickey_counter_y);
+	return GET_FLOAT(precise_mickey_counter_y);
 }
 
-void MouseDriverState::SetMickeyCounterX(const float value)
+void MouseDriverState::SetPreciseMickeyCounterX(const float value)
 {
-	SET_FLOAT(mickey_counter_x, value);
+	SET_FLOAT(precise_mickey_counter_x, value);
 }
 
-void MouseDriverState::SetMickeyCounterY(const float value)
+void MouseDriverState::SetPreciseMickeyCounterY(const float value)
 {
-	SET_FLOAT(mickey_counter_y, value);
+	SET_FLOAT(precise_mickey_counter_y, value);
+}
+
+int16_t MouseDriverState::GetMickeyCounterX() const
+{
+	return GET_INT16(mickey_counter_x);
+}
+
+int16_t MouseDriverState::GetMickeyCounterY() const
+{
+	return GET_INT16(mickey_counter_y);
+}
+
+void MouseDriverState::SetMickeyCounterX(const int16_t value)
+{
+	SET_INT16(mickey_counter_x, value);
+}
+
+void MouseDriverState::SetMickeyCounterY(const int16_t value)
+{
+	SET_INT16(mickey_counter_y, value);
 }
 
 float MouseDriverState::GetMickeysPerPixelX() const
@@ -701,16 +721,6 @@ void MouseDriverState::SetUpdateRegionY(const size_t index, const int16_t value)
 	}
 
 	SET_INT16_ARRAY(update_region_y, index, value);
-}
-
-uint16_t MouseDriverState::GetLanguage() const
-{
-	return GET_UINT16(language);
-}
-
-void MouseDriverState::SetLanguage(const uint16_t value)
-{
-	SET_UINT16(language, value);
 }
 
 uint8_t MouseDriverState::GetBiosScreenMode() const

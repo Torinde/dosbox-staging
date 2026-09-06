@@ -1,25 +1,26 @@
-// SPDX-FileCopyrightText:  2023-2025 The DOSBox Staging Team
+// SPDX-FileCopyrightText:  2023-2026 The DOSBox Staging Team
 // SPDX-FileCopyrightText:  2002-2021 The DOSBox Team
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include "dosbox.h"
 
-#include "ints/bios.h"
-#include "utils/bitops.h"
-#include "cpu/callback.h"
-#include "utils/checks.h"
-#include "cpu/cpu.h"
-#include "dos/dos_inc.h"
-#include "hardware/port.h"
-#include "utils/math_utils.h"
-#include "hardware/memory.h"
-#include "cpu/registers.h"
-#include "config/setup.h"
-#include "misc/support.h"
-
 #include <cstddef>
 #include <cstdlib>
 #include <cstring>
+#include <memory>
+
+#include "config/setup.h"
+#include "cpu/callback.h"
+#include "cpu/cpu.h"
+#include "cpu/registers.h"
+#include "dos/dos.h"
+#include "hardware/memory.h"
+#include "hardware/port.h"
+#include "ints/bios.h"
+#include "misc/support.h"
+#include "utils/bitops.h"
+#include "utils/checks.h"
+#include "utils/math_utils.h"
 
 CHECK_NARROWING();
 
@@ -634,7 +635,7 @@ static Bitu XMS_Handler()
 			if ((umb_flag & 1) == 0) {
 				DOS_LinkUMBsToMemChain(1);
 			}
-			uint8_t old_memstrat = static_cast<uint8_t>(
+			auto old_memstrat = static_cast<uint8_t>(
 			        DOS_GetMemAllocStrategy() & 0xff);
 			DOS_SetMemAllocStrategy(0x40); // search in UMBs only
 
@@ -712,25 +713,23 @@ static Bitu XMS_Handler()
 // Module object
 // ***************************************************************************
 
-Bitu GetEMSType(SectionProp* section);
+Bitu GetEMSType(SectionProp& section);
 
-class XMS final : public ModuleBase {
+class XMS {
 private:
 	CALLBACK_HandlerObject callbackhandler;
 
 public:
-	XMS(Section* configuration);
-	~XMS() override;
+	XMS(SectionProp& section);
+	~XMS();
 };
 
-XMS::XMS(Section* configuration) : ModuleBase(configuration), callbackhandler{}
+XMS::XMS(SectionProp& section) : callbackhandler{}
 {
-	SectionProp* section = static_cast<SectionProp*>(configuration);
-
 	umb = {};
 	a20 = {};
 
-	if (!section->GetBool("xms")) {
+	if (!section.GetBool("xms")) {
 		return;
 	}
 
@@ -779,9 +778,9 @@ XMS::XMS(Section* configuration) : ModuleBase(configuration), callbackhandler{}
 	xms.handles[0].is_free = false;
 
 	// Set up UMB chain
-	umb.is_available = section->GetBool("umb");
+	umb.is_available         = section.GetBool("umb");
 	const bool ems_available = GetEMSType(section) > 0;
-	DOS_BuildUMBChain(section->GetBool("umb"), ems_available);
+	DOS_BuildUMBChain(section.GetBool("umb"), ems_available);
 
 	// TODO: If implementing CP/M compatibility, mirror the JMP
 	//       instruction in HMA
@@ -821,21 +820,15 @@ XMS::~XMS()
 // Lifecycle
 // ***************************************************************************
 
-static std::unique_ptr<XMS> instance = {};
+static std::unique_ptr<XMS> xms_module = {};
 
-static void XMS_ShutDown(Section* /* sec */)
+void XMS_Init(SectionProp& section)
 {
-	instance = {};
+	xms_module = std::make_unique<XMS>(section);
 }
 
-void XMS_Init(Section* sec)
+void XMS_Destroy()
 {
-	assert(sec);
-
-	if (!instance) {
-		instance = std::make_unique<XMS>(sec);
-	}
-
-	constexpr auto changeable_at_runtime = true;
-	sec->AddDestroyFunction(&XMS_ShutDown, changeable_at_runtime);
+	xms_module = {};
 }
+

@@ -1,15 +1,15 @@
-// SPDX-FileCopyrightText:  2023-2025 The DOSBox Staging Team
+// SPDX-FileCopyrightText:  2023-2026 The DOSBox Staging Team
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include "tree.h"
 
 #include "cpu/callback.h"
-#include "utils/checks.h"
-#include "dos/dos_inc.h"
+#include "dos/dos.h"
 #include "dos/drives.h"
 #include "ints/int10.h"
-#include "shell/shell.h"
 #include "misc/unicode.h"
+#include "shell/shell.h"
+#include "utils/checks.h"
 
 CHECK_NARROWING();
 
@@ -96,7 +96,7 @@ void TREE::Run()
 
 	// Make sure no other switches are supplied
 	std::string tmp_str = {};
-	if (cmd->FindStringBegin("/", tmp_str)) {
+	if (cmd->FindStringBeginCaseSensitive("/", tmp_str)) {
 		tmp_str = std::string("/") + tmp_str;
 		WriteOut(MSG_Get("SHELL_ILLEGAL_SWITCH"), tmp_str.c_str());
 		return;
@@ -294,7 +294,7 @@ bool TREE::DisplayTree(MoreOutputStrings& output, const std::string& path,
 	bool has_next_entry = DOS_FindFirst(pattern.c_str(), flags._data);
 	size_t space_needed = 7; // length of indentation + ellipsis
 
-	while (!shutdown_requested && has_next_entry) {
+	while (!DOSBOX_IsShutdownRequested() && has_next_entry) {
 		DOS_DTA::Result result = {};
 
 		const DOS_DTA dta(dos.dta());
@@ -376,8 +376,7 @@ bool TREE::DisplayTree(MoreOutputStrings& output, const std::string& path,
 		output.AddString("%s%s\n", graph.c_str(), entry.name.c_str());
 		skip_empty_line = false;
 
-		CALLBACK_Idle();
-		if (shutdown_requested) {
+		if (CALLBACK_Idle()) {
 			break;
 		}
 

@@ -66,8 +66,7 @@ void DOS_Shell::InputCommand(char* line)
 
 	history->Append(command, get_utf8_code_page());
 
-	const auto* const dos_section = dynamic_cast<SectionProp*>(
-	        control->GetSection("dos"));
+	const auto dos_section = get_section("dos");
 	if (dos_section == nullptr) {
 		assert(false);
 		return;
@@ -115,7 +114,7 @@ std::string DOS_Shell::ReadCommand()
 
 	CommandPrompt prompt;
 
-	while (!shutdown_requested) {
+	while (!DOSBOX_IsShutdownRequested()) {
 		assert(history_index < history_clone.size());
 		assert(completion.empty() || completion_index < completion.size());
 		assert(command.empty() || cursor_position <= command.size());
@@ -549,9 +548,9 @@ std::string DOS_Shell::ResolvePath(const std::string_view name) const
 			}
 		}
 
-		prefixes.insert(prefixes.end(),
+		prefixes.insert(prefixes.end(), //-V823
 		                std::make_move_iterator(path_directories.begin()),
-		                std::make_move_iterator(path_directories.end())); //-V823
+		                std::make_move_iterator(path_directories.end()));
 	}
 
 	const bool has_extension = !get_executable_extension(name).empty();

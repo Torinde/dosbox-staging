@@ -9,21 +9,28 @@
 #include <string>
 #include <vector>
 
+#include "dos/dos.h"
 #include "mixer.h"
 
 enum DiskNoiseIoType { Read, Write };
+
 enum DiskNoiseSeekType {
 	Sequential,
 	RandomAccess,
 };
 
+enum class DiskNoiseMode {
+	Off,
+	SeekOnly,
+	On,
+};
+
 class DiskNoiseDevice {
 public:
-	DiskNoiseDevice(const DiskType disk_type, const bool disk_noise_enabled,
+	DiskNoiseDevice(const DiskType disk_type, const DiskNoiseMode disk_noise_mode,
 	                const std::string& spin_up_sample_path,
 	                const std::string& spin_sample_path,
-	                const std::vector<std::string>& seek_sample_paths,
-	                bool loop_spin_sample);
+	                const std::vector<std::string>& seek_sample_paths);
 	~DiskNoiseDevice();
 	void ActivateSpin();
 	void PlaySeek();
@@ -32,7 +39,7 @@ public:
 	                   DiskNoiseIoType disk_operation_type);
 
 private:
-	bool disk_noise_enabled          = false;
+	DiskNoiseMode disk_noise_mode    = DiskNoiseMode::Off;
 	DiskType disk_type               = DiskType::HardDisk;
 	std::mutex mutex                 = {};
 	std::string last_file_read_path  = {};
@@ -62,8 +69,8 @@ private:
 
 class DiskNoises {
 public:
-	DiskNoises(const bool enable_floppy_disk_noise,
-	           const bool enable_hard_disk_noise,
+	DiskNoises(const DiskNoiseMode enable_floppy_disk_noise,
+	           const DiskNoiseMode enable_hard_disk_noise,
 	           const std::string& spin_up, const std::string& spin,
 	           const std::vector<std::string>& hdd_seek_samples,
 	           const std::string& floppy_spin_up, const std::string& floppy_spin,
@@ -82,5 +89,9 @@ private:
 
 	void AudioCallback(int frames);
 };
+
+void DISKNOISE_AddConfigSection(const ConfigPtr& conf);
+void DISKNOISE_Init();
+void DISKNOISE_Destroy();
 
 #endif // DOSBOX_DISK_NOISE_H

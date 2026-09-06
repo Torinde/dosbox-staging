@@ -196,6 +196,20 @@ void PcSpeakerDiscrete::ForwardPIT(const float newindex)
 	}
 }
 
+// Control word written for channel 2: drain pending audio with the old state,
+// then park in a safe sentinel until SetCounter installs the new count.
+void PcSpeakerDiscrete::SetPITControl(const PitMode /*pit_mode*/)
+{
+	const auto newindex = static_cast<float>(PIC_TickIndex());
+	ForwardPIT(newindex);
+
+	prev_pit_mode = pit_mode;
+	pit_last      = 0;
+	pit_mode      = PitMode::InterruptOnTerminalCount;
+
+	channel->WakeUp();
+}
+
 // PIT-mode activation
 void PcSpeakerDiscrete::SetCounter(int count, const PitMode mode)
 {
@@ -245,7 +259,7 @@ void PcSpeakerDiscrete::SetCounter(int count, const PitMode mode)
 
 	case PitMode::SquareWaveAlias:
 	case PitMode::SquareWave:
-		if (count == 0 || count < minimum_tick_rate) {
+		if (count < minimum_tick_rate) {
 			// skip frequencies that can't be represented
 			pit_last = 0;
 			pit_mode = PitMode::InterruptOnTerminalCount;
@@ -421,13 +435,15 @@ void PcSpeakerDiscrete::SetFilterState(const FilterState filter_state)
 		// reflects people's actual experience of the PC speaker
 		// sound than the raw unfiltered output, and it's a lot
 		// more pleasant to listen to, especially in headphones.
-		constexpr auto hp_order       = 3;
+		constexpr auto hp_order          = 3;
 		constexpr auto hp_cutoff_freq_hz = 120;
+
 		channel->ConfigureHighPassFilter(hp_order, hp_cutoff_freq_hz);
 		channel->SetHighPassFilter(FilterState::On);
 
-		constexpr auto lp_order       = 2;
+		constexpr auto lp_order          = 2;
 		constexpr auto lp_cutoff_freq_hz = 4800;
+
 		channel->ConfigureLowPassFilter(lp_order, lp_cutoff_freq_hz);
 		channel->SetLowPassFilter(FilterState::On);
 	} else {
@@ -445,12 +461,14 @@ bool PcSpeakerDiscrete::TryParseAndSetCustomFilter(const std::string& filter_cho
 PcSpeakerDiscrete::PcSpeakerDiscrete()
 {
 	// Register the sound channel
-	constexpr bool Stereo = false;
-	constexpr bool SignedData = true;
+	constexpr bool Stereo      = false;
+	constexpr bool SignedData  = true;
 	constexpr bool NativeOrder = true;
-	const auto callback = std::bind(MIXER_PullFromQueueCallback<PcSpeakerDiscrete, float, Stereo, SignedData, NativeOrder>,
-	                                std::placeholders::_1,
-	                                this);
+
+	const auto callback = std::bind(
+	        MIXER_PullFromQueueCallback<PcSpeakerDiscrete, float, Stereo, SignedData, NativeOrder>,
+	        std::placeholders::_1,
+	        this);
 
 	channel = MIXER_AddChannel(callback,
 	                           UseMixerRate,

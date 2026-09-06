@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText:  2020-2025 The DOSBox Staging Team
+// SPDX-FileCopyrightText:  2020-2026 The DOSBox Staging Team
 // SPDX-FileCopyrightText:  2002-2021 The DOSBox Team
 // SPDX-License-Identifier: GPL-2.0-or-later
 
@@ -7,7 +7,6 @@
 #include <array>
 #include <iomanip>
 #include <memory>
-#include <queue>
 #include <string>
 #include <unistd.h>
 #include <vector>
@@ -16,7 +15,6 @@
 #include "config/config.h"
 #include "config/setup.h"
 #include "dosbox.h"
-#include "hardware/hardware.h"
 #include "hardware/pic.h"
 #include "hardware/timer.h"
 #include "misc/notifications.h"
@@ -28,10 +26,7 @@
 
 #define LOG_GUS 0 // set to 1 for detailed logging
 
-static void GUS_TimerEvent(uint32_t t);
-static void GUS_DMA_Event(uint32_t val);
-
-std::unique_ptr<Gus> gus = nullptr;
+static std::unique_ptr<Gus> gus = {};
 
 Voice::Voice(uint8_t num, VoiceIrq& irq) noexcept
         : vol_ctrl{irq.vol_state},
@@ -305,19 +300,19 @@ void Voice::WriteWaveRate(uint16_t val) noexcept
 // becomes IRQ9), so we translate IRQ2 to 9 and vice-versa on this API
 // boundaries. This is also what DOSBox expects: it uses IRQ9 instead of IRQ2.
 
-constexpr uint8_t to_internal_irq(const uint8_t irq)
+static constexpr uint8_t to_internal_irq(const uint8_t irq)
 {
 	assert(irq != 9);
 	return irq == 2 ? 9 : irq;
 }
 
-constexpr uint8_t to_external_irq(const uint8_t irq)
+static constexpr uint8_t to_external_irq(const uint8_t irq)
 {
 	assert(irq != 2);
 	return irq == 9 ? 2 : irq;
 }
 
-static void GUS_PicCallback()
+static void gus_pic_callback()
 {
 	if (!gus || !gus->channel->is_enabled) {
 		return;
@@ -350,23 +345,24 @@ Gus::Gus(const io_port_t port_pref, const uint8_t dma_pref, const uint8_t irq_pr
 
 	RegisterIoHandlers();
 
-	constexpr bool Stereo = true;
-	constexpr bool SignedData = true;
+	constexpr bool Stereo      = true;
+	constexpr bool SignedData  = true;
 	constexpr bool NativeOrder = true;
 
 	// Register the Audio and DMA channels
-	const auto mixer_callback = std::bind(MIXER_PullFromQueueCallback<Gus, AudioFrame, Stereo, SignedData, NativeOrder>,
-	                                      std::placeholders::_1,
-	                                      this);
+	const auto mixer_callback = std::bind(
+	        MIXER_PullFromQueueCallback<Gus, AudioFrame, Stereo, SignedData, NativeOrder>,
+	        std::placeholders::_1,
+	        this);
 
 	channel = MIXER_AddChannel(mixer_callback,
-	                                 UseMixerRate,
-	                                 ChannelName::GravisUltrasound,
-	                                 {ChannelFeature::Sleep,
-	                                  ChannelFeature::Stereo,
-	                                  ChannelFeature::ReverbSend,
-	                                  ChannelFeature::ChorusSend,
-	                                  ChannelFeature::DigitalAudio});
+	                           UseMixerRate,
+	                           ChannelName::GravisUltrasound,
+	                           {ChannelFeature::Sleep,
+	                            ChannelFeature::Stereo,
+	                            ChannelFeature::ReverbSend,
+	                            ChannelFeature::ChorusSend,
+	                            ChannelFeature::DigitalAudio});
 
 	assert(channel);
 
@@ -375,17 +371,37 @@ Gus::Gus(const io_port_t port_pref, const uint8_t dma_pref, const uint8_t irq_pr
 	// real GF1 chip which always outputs a 44.1 kHz sample stream to
 	// the DAC, but starts dropping samples in the internal mixer above
 	// 14 active voices due to bandwidth limitations. Technically, we
-	// could emulate this exact behaviour, but in practice it would 
+	// could emulate this exact behaviour, but in practice it would
 	// make little to no difference compared to our current method.
 	//
 	channel->SetResampleMethod(ResampleMethod::ZeroOrderHoldAndResample);
 	channel->SetZeroOrderHoldUpsamplerTargetRate(GusOutputSampleRate);
 
-	// GUS is prone to accumulating beyond the 16-bit range so we scale back
-	// by RMS.
-	constexpr auto rms_squared = static_cast<float>(M_SQRT1_2);
-	channel->Set0dbScalar(rms_squared);
+	SetFilter(filter_prefs);
 
+	ms_per_render = MillisInSecond / channel->GetSampleRate();
+
+	UpdatePlaybackDmaAddress(dma_pref);
+	UpdateRecordingDmaAddress(dma_pref);
+
+	// Populate the volume, pan, and auto-exec arrays
+	PopulateVolScalars();
+	PopulatePanScalars();
+	SetupEnvironment(port_pref, ultradir);
+
+	output_queue.Resize(iceil(channel->GetFramesPerBlock() * 2.0f));
+	TIMER_AddTickHandler(gus_pic_callback);
+
+	LOG_MSG("GUS: Running on port %xh, IRQ %d, and DMA %d",
+	        port_pref,
+	        to_external_irq(irq1),
+	        dma1);
+
+	MIXER_UnlockMixerThread();
+}
+
+void Gus::SetFilter(const std::string& filter_prefs)
+{
 	// The filter parameters have been tweaked by analysing real hardware
 	// recordings of the GUS Classic (GF1 chip).
 	//
@@ -414,26 +430,6 @@ Gus::Gus(const io_port_t port_pref, const uint8_t dma_pref, const uint8_t irq_pr
 		set_section_property_value("gus", "gus_filter", "on");
 		enable_filter();
 	}
-
-	ms_per_render = MillisInSecond / channel->GetSampleRate();
-
-	UpdatePlaybackDmaAddress(dma_pref);
-	UpdateRecordingDmaAddress(dma_pref);
-
-	// Populate the volume, pan, and auto-exec arrays
-	PopulateVolScalars();
-	PopulatePanScalars();
-	SetupEnvironment(port_pref, ultradir);
-
-	output_queue.Resize(iceil(channel->GetFramesPerBlock() * 2.0f));
-	TIMER_AddTickHandler(GUS_PicCallback);
-
-	LOG_MSG("GUS: Running on port %xh, IRQ %d, and DMA %d",
-	        port_pref,
-	        to_external_irq(irq1),
-	        dma1);
-
-	MIXER_UnlockMixerThread();
 }
 
 void Gus::ActivateVoices(uint8_t requested_voices)
@@ -519,11 +515,9 @@ void Gus::RenderUpToNow()
 		        std::floor(elapsed_ms / ms_per_render));
 		assert(num_elapsed_frames > 0);
 
-		// Enqueue in the FIFO that will be drained when the mixer pulls
-		// frames
-		for (auto& frame : RenderFrames(num_elapsed_frames)) {
-			fifo.emplace(frame);
-		}
+		// Append to the FIFO that will be drained when the mixer pulls frames
+		const auto& frames = RenderFrames(num_elapsed_frames);
+		fifo.insert(fifo.end(), frames.begin(), frames.end());
 		last_rendered_ms += num_elapsed_frames * ms_per_render;
 	}
 }
@@ -539,14 +533,15 @@ void Gus::PicCallback(const int num_requested_frames)
 
 	auto num_frames_remaining = num_requested_frames;
 
-	// First, send any frames we've queued since the last callback
-	while (num_frames_remaining && fifo.size()) {
-		AudioFrame frame = fifo.front();
-		fifo.pop();
-		output_queue.NonblockingEnqueue(std::move(frame));
-		--num_frames_remaining;
+	// Drain any pre-rendered cycle-accurate frames in a single bulk enqueue
+	if (!fifo.empty() && num_frames_remaining > 0) {
+		const auto num_from_fifo = std::min(num_frames_remaining,
+		                                    static_cast<int>(fifo.size()));
+		output_queue.NonblockingBulkEnqueue(fifo,
+		                                    static_cast<size_t>(num_from_fifo));
+		num_frames_remaining -= num_from_fifo;
 	}
-	// If the queue's run dry, render the remainder and sync-up our time datum
+	// Render any remaining frames needed
 	if (num_frames_remaining > 0) {
 		auto frames = RenderFrames(num_frames_remaining);
 		output_queue.NonblockingBulkEnqueue(frames, num_frames_remaining);
@@ -662,14 +657,14 @@ bool Gus::SizedDmaTransfer()
 	LOG_MSG("GUS DMA event: max %u bytes. DMA: tc=%u mask=0 cnt=%u",
 	        BYTES_PER_DMA_XFER,
 	        dma_channel->has_reached_terminal_count ? 1 : 0,
-	        dma_channel->curr_count + 1);
+	        static_cast<uint32_t>(dma_channel->curr_count + 1));
 #endif
 
 	// Get the current DMA offset relative to the block of GUS memory
 	const auto offset = GetDmaOffset();
 
 	// Get the pending DMA count from channel
-	const uint16_t desired = dma_channel->curr_count + 1;
+	const uint32_t desired = dma_channel->curr_count + 1;
 
 	// Will the maximum transfer stay within the GUS RAM's size?
 	assert(static_cast<size_t>(offset) + desired <= ram.size());
@@ -730,17 +725,17 @@ bool Gus::IsDmaXfer16Bit() noexcept
 	return (dma_control_register.is_channel_16bit && dma1 >= 4);
 }
 
-static void GUS_DMA_Event(uint32_t)
+static void gus_dma_event(uint32_t)
 {
 	if (gus->PerformDmaTransfer()) {
-		PIC_AddEvent(GUS_DMA_Event, MS_PER_DMA_XFER);
+		PIC_AddEvent(gus_dma_event, MS_PER_DMA_XFER);
 	}
 }
 
 void Gus::StartDmaTransfers()
 {
-	PIC_RemoveEvents(GUS_DMA_Event);
-	PIC_AddEvent(GUS_DMA_Event, MS_PER_DMA_XFER);
+	PIC_RemoveEvents(gus_dma_event);
+	PIC_AddEvent(gus_dma_event, MS_PER_DMA_XFER);
 }
 
 void Gus::DmaCallback(const DmaChannel*, DmaEvent event)
@@ -1069,6 +1064,14 @@ void Gus::RegisterIoHandlers()
 	write_handlers.at(8).Install(0x20b + port_base, write_to, io_width_t::byte);
 }
 
+static void gus_timer_event(uint32_t t)
+{
+	if (gus->CheckTimer(t)) {
+		const auto& timer = t == 0 ? gus->timer_one : gus->timer_two;
+		PIC_AddEvent(gus_timer_event, timer.delay, t);
+	}
+}
+
 void Gus::Reset() noexcept
 {
 	// Halt playback before altering the DSP state
@@ -1102,21 +1105,15 @@ void Gus::Reset() noexcept
 	register_data         = 0;
 	selected_register     = 0;
 	should_change_irq_dma = false;
-	PIC_RemoveEvents(GUS_TimerEvent);
+	PIC_RemoveEvents(gus_timer_event);
 
-	reset_register.data = {};
+	reset_register.data       = {};
 	mix_control_register.data = MixControlRegisterDefaultState;
+
+	fifo.clear();
 }
 
-static void GUS_TimerEvent(uint32_t t)
-{
-	if (gus->CheckTimer(t)) {
-		const auto& timer = t == 0 ? gus->timer_one : gus->timer_two;
-		PIC_AddEvent(GUS_TimerEvent, timer.delay, t);
-	}
-}
-
-static void gus_destroy(Section*);
+static void gus_evict(Section* sec);
 
 void Gus::UpdateRecordingDmaAddress(const uint8_t new_address)
 {
@@ -1147,8 +1144,10 @@ void Gus::UpdatePlaybackDmaAddress(const uint8_t new_address)
 	dma1        = new_address;
 	dma_channel = DMA_GetChannel(dma1);
 	assert(dma_channel);
-	dma_channel->ReserveFor(ChannelName::GravisUltrasound, gus_destroy);
+
+	dma_channel->ReserveFor(ChannelName::GravisUltrasound, gus_evict);
 	dma_channel->RegisterCallback(std::bind(&Gus::DmaCallback, this, _1, _2));
+
 #if LOG_GUS
 	LOG_MSG("GUS: Assigned playback DMA address to %u", dma1);
 #endif
@@ -1164,7 +1163,7 @@ void Gus::WriteToPort(io_port_t port, io_val_t value, io_width_t width)
 	switch (port - port_base) {
 	case 0x200:
 		mix_control_register.data = static_cast<uint8_t>(val);
-		should_change_irq_dma = true;
+		should_change_irq_dma     = true;
 		return;
 	case 0x208: adlib_command_reg = static_cast<uint8_t>(val); break;
 	case 0x209:
@@ -1179,7 +1178,7 @@ void Gus::WriteToPort(io_port_t port, io_val_t value, io_width_t width)
 		timer_two.is_masked = (val & 0x20) > 0;
 		if (val & 0x1) {
 			if (!timer_one.is_counting_down) {
-				PIC_AddEvent(GUS_TimerEvent, timer_one.delay, 0);
+				PIC_AddEvent(gus_timer_event, timer_one.delay, 0);
 				timer_one.is_counting_down = true;
 			}
 		} else {
@@ -1187,7 +1186,7 @@ void Gus::WriteToPort(io_port_t port, io_val_t value, io_width_t width)
 		}
 		if (val & 0x2) {
 			if (!timer_two.is_counting_down) {
-				PIC_AddEvent(GUS_TimerEvent, timer_two.delay, 1);
+				PIC_AddEvent(gus_timer_event, timer_two.delay, 1);
 				timer_two.is_counting_down = true;
 			}
 		} else {
@@ -1207,7 +1206,8 @@ void Gus::WriteToPort(io_port_t port, io_val_t value, io_width_t width)
 			//  Section 2.13.
 			should_change_irq_dma = false;
 
-			const auto address_select = AddressSelectRegister{static_cast<uint8_t>(val)};
+			const auto address_select = AddressSelectRegister{
+			        static_cast<uint8_t>(val)};
 
 			const auto ch1_selector = address_select.channel1_selector;
 
@@ -1216,17 +1216,22 @@ void Gus::WriteToPort(io_port_t port, io_val_t value, io_width_t width)
 			if (mix_control_register.irq_control_selected) {
 
 				// Application is selecting IRQ addresses
-				if (ch1_selector && ch1_selector < IrqAddresses.size()) {
-					irq1 = to_internal_irq(IrqAddresses[ch1_selector]);
+				if (ch1_selector &&
+				    ch1_selector < IrqAddresses.size()) {
+					irq1 = to_internal_irq(
+					        IrqAddresses[ch1_selector]);
 				}
 
 				if (address_select.channel2_combined_with_channel1) {
-					// Channel 2 can be combined if it's selector is 0
+					// Channel 2 can be combined if it's
+					// selector is 0
 					if (ch2_selector == 0) {
 						irq2 = irq1;
 					}
-				} else if (ch2_selector && ch2_selector < IrqAddresses.size()) {
-					irq2 = to_internal_irq(IrqAddresses[ch2_selector]);
+				} else if (ch2_selector &&
+				           ch2_selector < IrqAddresses.size()) {
+					irq2 = to_internal_irq(
+					        IrqAddresses[ch2_selector]);
 				}
 #if LOG_GUS
 				LOG_MSG("GUS: Assigned GF1 IRQ to %d and MIDI IRQ to %d",
@@ -1236,17 +1241,22 @@ void Gus::WriteToPort(io_port_t port, io_val_t value, io_width_t width)
 			} else {
 
 				// Application is selecting DMA addresses
-				if (ch1_selector && ch1_selector < DmaAddresses.size()) {
-					UpdatePlaybackDmaAddress(DmaAddresses[ch1_selector]);
+				if (ch1_selector &&
+				    ch1_selector < DmaAddresses.size()) {
+					UpdatePlaybackDmaAddress(
+					        DmaAddresses[ch1_selector]);
 				}
 
 				if (address_select.channel2_combined_with_channel1) {
-					// Channel 2 can be combined if it's selector is 0
+					// Channel 2 can be combined if it's
+					// selector is 0
 					if (ch2_selector == 0) {
 						UpdateRecordingDmaAddress(dma1);
 					}
-				} else if (ch2_selector && ch2_selector < DmaAddresses.size()) {
-					UpdateRecordingDmaAddress(DmaAddresses[ch2_selector]);
+				} else if (ch2_selector &&
+				           ch2_selector < DmaAddresses.size()) {
+					UpdateRecordingDmaAddress(
+					        DmaAddresses[ch2_selector]);
 				}
 			}
 		}
@@ -1488,7 +1498,7 @@ Gus::~Gus()
 		dma_channel->Reset();
 	}
 
-	TIMER_DelTickHandler(GUS_PicCallback);
+	TIMER_DelTickHandler(gus_pic_callback);
 
 	MIXER_UnlockMixerThread();
 }
@@ -1517,63 +1527,17 @@ void GUS_NotifyUnlockMixer()
 	}
 }
 
-static void gus_destroy([[maybe_unused]] Section* sec)
-{
-	// GUS destroy is run when the user wants to deactivate the GUS:
-	// C:\> config -set gus=false
-	// TODO: therefore, this function should also remove the
-	//       ULTRASND and ULTRADIR environment variables.
-
-	if (gus) {
-		MIXER_LockMixerThread();
-		gus->PrintStats();
-		gus.reset();
-		MIXER_UnlockMixerThread();
-	}
-}
-
-static void gus_init(Section* sec)
-{
-	assert(sec);
-	const SectionProp* conf = dynamic_cast<SectionProp*>(sec);
-	if (!conf || !conf->GetBool("gus")) {
-		return;
-	}
-
-	// Read the GUS config settings
-	const auto port = static_cast<uint16_t>(conf->GetHex("gusbase"));
-
-	const auto dma = static_cast<uint8_t>(conf->GetInt("gusdma"));
-	// The conf system handles invalid settings, so just assert validity
-	assert(contains(DmaAddresses, dma));
-
-	auto irq = static_cast<uint8_t>(conf->GetInt("gusirq"));
-	// The conf system handles invalid settings, so just assert validity
-	assert(contains(IrqAddresses, irq));
-
-	const std::string ultradir = conf->GetString("ultradir");
-
-	const std::string filter_prefs = conf->GetString("gus_filter");
-
-	// Instantiate the GUS with the settings
-	gus = std::make_unique<Gus>(port, dma, irq, ultradir.c_str(), filter_prefs);
-
-	constexpr auto changeable_at_runtime = true;
-	sec->AddDestroyFunction(&gus_destroy, changeable_at_runtime);
-}
-
-void init_gus_dosbox_settings(SectionProp& secprop)
+static void init_gus_config_settings(SectionProp& secprop)
 {
 	constexpr auto when_idle = Property::Changeable::WhenIdle;
 
 	auto* bool_prop = secprop.AddBool("gus", when_idle, false);
 	assert(bool_prop);
 	bool_prop->SetHelp(
-	        "Enable Gravis UltraSound emulation ('off' by default).\n"
-	        "Many games and all demos upload their own sounds, but some rely on the\n"
-	        "instrument patch files included with the GUS for MIDI playback (see 'ultradir'\n"
-	        "for details). Some games also require ULTRAMID.EXE to be loaded prior to\n"
-	        "starting the game.\n"
+	        "Enable Gravis UltraSound emulation ('off' by default). Many games and all demos\n"
+	        "upload their own sounds, but some rely on the instrument patch files included\n"
+	        "with the GUS for MIDI playback (see 'ultradir' for details). Some games also\n"
+	        "require ULTRAMID.EXE to be loaded prior to starting the game.\n"
 	        "\n"
 	        "Note: The default settings of base address 240, IRQ 5, and DMA 3 have been\n"
 	        "      chosen so the GUS can coexist with a Sound Blaster card. This works fine\n"
@@ -1586,22 +1550,29 @@ void init_gus_dosbox_settings(SectionProp& secprop)
 	assert(hex_prop);
 	hex_prop->SetValues({"210", "220", "230", "240", "250", "260"});
 	hex_prop->SetHelp(
-	        "The IO base address of the Gravis UltraSound (240 by default).");
+	        "The IO base address of the Gravis UltraSound (240 by default).\n"
+	        "Possible values: 210, 220, 230, 240, 250, 260");
 
 	auto* int_prop = secprop.AddInt("gusirq", when_idle, 5);
 	assert(int_prop);
 	int_prop->SetValues({"2", "3", "5", "7", "11", "12", "15"});
-	int_prop->SetHelp("The IRQ number of the Gravis UltraSound (5 by default).");
+	int_prop->SetHelp(
+	        "The IRQ number of the Gravis UltraSound (5 by default).\n"
+	        "Possible values: 2, 3, 5, 7, 11, 12, 15");
 
 	int_prop = secprop.AddInt("gusdma", when_idle, 3);
 	assert(int_prop);
 	int_prop->SetValues({"1", "3", "5", "6", "7"});
-	int_prop->SetHelp("The DMA channel of the Gravis UltraSound (3 by default).");
+	int_prop->SetHelp(
+	        "The DMA channel of the Gravis UltraSound (3 by default).\n"
+	        "Possible values: 1, 3, 5, 6, 7");
 
 	auto* str_prop = secprop.AddString("gus_filter", when_idle, "on");
 	assert(str_prop);
 	str_prop->SetHelp(
-	        "Filter for the Gravis UltraSound audio output:\n"
+	        "Filter for the Gravis UltraSound audio output ('on' by default).\n"
+	        "Possible values:\n"
+	        "\n"
 	        "  on:        Filter the output (default).\n"
 	        "  off:       Don't filter the output.\n"
 	        "  <custom>:  Custom filter definition; see 'sb_filter' for details.");
@@ -1609,20 +1580,81 @@ void init_gus_dosbox_settings(SectionProp& secprop)
 	str_prop = secprop.AddString("ultradir", when_idle, "C:\\ULTRASND");
 	assert(str_prop);
 	str_prop->SetHelp(
-	        "Path to the UltraSound directory ('C:\\ULTRASND' by default).\n"
-	        "This should have a 'MIDI' subdirectory containing the patches (instrument\n"
-	        "files) required by some games for MIDI music playback. Not all games need these\n"
-	        "patches; many GUS-native games and all demos upload their own custom sounds\n"
-	        "instead.");
+	        "Path to the UltraSound directory ('C:\\ULTRASND' by default). This should have a\n"
+	        "'MIDI' subdirectory containing the patches (instrument files) required by some\n"
+	        "games for MIDI music playback. Not all games need these patches; many GUS-native\n"
+	        "games and all demos upload their own custom sounds instead.");
+}
+
+void GUS_Init()
+{
+	const auto section = get_section("gus");
+	if (!section->GetBool("gus")) {
+		return;
+	}
+
+	// Read the GUS config settings
+	const auto port = static_cast<uint16_t>(section->GetHex("gusbase"));
+
+	const auto dma = static_cast<uint8_t>(section->GetInt("gusdma"));
+	// The section system handles invalid settings, so just assert validity
+	assert(contains(DmaAddresses, dma));
+
+	auto irq = static_cast<uint8_t>(section->GetInt("gusirq"));
+	// The section system handles invalid settings, so just assert validity
+	assert(contains(IrqAddresses, irq));
+
+	const std::string ultradir = section->GetString("ultradir");
+
+	const std::string filter_prefs = section->GetString("gus_filter");
+
+	// Instantiate the GUS with the settings
+	gus = std::make_unique<Gus>(port, dma, irq, ultradir.c_str(), filter_prefs);
+}
+
+void GUS_Destroy()
+{
+	// GUS destroy is run when the user wants to deactivate the GUS:
+	// C:\> config -set gus=false
+	// TODO: therefore, this function should also remove the
+	//       ULTRASND and ULTRADIR environment variables.
+
+	if (gus) {
+		MIXER_LockMixerThread();
+
+		gus->PrintStats();
+		gus.reset();
+
+		MIXER_UnlockMixerThread();
+	}
+}
+
+static void gus_evict([[maybe_unused]] Section* sec)
+{
+	GUS_Destroy();
+	set_section_property_value("gus", "gus", "off");
+}
+
+static void notify_gus_setting_updated(SectionProp& section,
+                                       const std::string& prop_name)
+{
+	if (prop_name == "gus_filter") {
+		if (gus) {
+			gus->SetFilter(section.GetString("gus_filter"));
+		}
+
+	} else {
+		GUS_Destroy();
+		GUS_Init();
+	}
 }
 
 void GUS_AddConfigSection(const ConfigPtr& conf)
 {
 	assert(conf);
 
-	constexpr auto changeable_at_runtime = true;
+	auto section = conf->AddSection("gus");
+	section->AddUpdateHandler(notify_gus_setting_updated);
 
-	SectionProp* sec = conf->AddSectionProp("gus", &gus_init, changeable_at_runtime);
-	assert(sec);
-	init_gus_dosbox_settings(*sec);
+	init_gus_config_settings(*section);
 }

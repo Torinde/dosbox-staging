@@ -6,13 +6,15 @@
 #include <algorithm>
 #include <cassert>
 #include <iterator>
+#include <numeric>
 #include <vector>
 
-#include "misc/cross.h"
-#include "dos_inc.h"
+#include "dos.h"
 #include "dos/drives.h"
-#include "utils/string_utils.h"
+#include "misc/cross.h"
 #include "misc/support.h"
+#include "misc/unicode.h"
+#include "utils/string_utils.h"
 
 int fileInfoCounter = 0;
 
@@ -350,7 +352,6 @@ void DOS_Drive_Cache::CacheOut(const char* path, bool ignoreLastDir) {
 	}
 	// clear lists
 	dir->fileList.clear();
-	dir->longNameList.clear();
 	save_dir = nullptr;
 }
 
@@ -371,7 +372,7 @@ bool DOS_Drive_Cache::GetShortName(const char* fullname, char* shortname) {
 	else
 		return false;
 
-	std::vector<CFileInfo*>::size_type filelist_size = curDir->longNameList.size();
+	std::vector<CFileInfo*>::size_type filelist_size = curDir->fileList.size();
 	if (filelist_size <= 0) {
 		return false;
 	}
@@ -379,11 +380,11 @@ bool DOS_Drive_Cache::GetShortName(const char* fullname, char* shortname) {
 	// The orgname part of the list is not sorted (shortname is)! So we can only walk through it.
 	for(Bitu i = 0; i < filelist_size; i++) {
 #if defined (WIN32)
-		if (strcasecmp(pos,curDir->longNameList[i]->orgname) == 0) {
+		if (strcasecmp(pos,curDir->fileList[i]->orgname) == 0) {
 #else
-		if (strcmp(pos,curDir->longNameList[i]->orgname) == 0) {
+		if (strcmp(pos,curDir->fileList[i]->orgname) == 0) {
 #endif
-			safe_strncpy(shortname, curDir->longNameList[i]->shortname, DOS_NAMELENGTH_ASCII);
+			safe_strncpy(shortname, curDir->fileList[i]->shortname, DOS_NAMELENGTH_ASCII);
 			return true;
 		}
 	}
@@ -424,17 +425,17 @@ int DOS_Drive_Cache::CompareShortname(const char* compareName, const char* short
 unsigned DOS_Drive_Cache::CreateShortNameID(CFileInfo *curDir, const char *name)
 {
 	assert(curDir);
-	const auto filelist_size = curDir->longNameList.size();
+	const auto filelist_size = curDir->fileList.size();
 	if (filelist_size == 0)
 		return 1; // short name IDs start with 1
 
 	unsigned found_nr = 0;
-	Bits low = 0;
-	Bits high = (Bits)(filelist_size - 1);
+	Bits low  = 0;
+	auto high = (Bits)(filelist_size - 1);
 
 	while (low <= high) {
-		auto mid = (low + high) / 2;
-		const char *other_shortname = curDir->longNameList[mid]->shortname;
+		auto mid = std::midpoint(low, high);
+		const char *other_shortname = curDir->fileList[mid]->shortname;
 		const int res = CompareShortname(name, other_shortname);
 		
 		if (res>0)	low  = mid+1; else
@@ -442,9 +443,9 @@ unsigned DOS_Drive_Cache::CreateShortNameID(CFileInfo *curDir, const char *name)
 		else {
 			// any more same x chars in next entries ?	
 			do {
-				found_nr = curDir->longNameList[mid]->shortNr;
+				found_nr = curDir->fileList[mid]->shortNr;
 				mid++;
-			} while((Bitu)mid < filelist_size && (CompareShortname(name, curDir->longNameList[mid]->shortname) == 0));
+			} while((Bitu)mid < filelist_size && (CompareShortname(name, curDir->fileList[mid]->shortname) == 0));
 			break;
 		};
 	}
@@ -463,86 +464,6 @@ bool DOS_Drive_Cache::RemoveTrailingDot(char* shortname) {
 	return false;
 }
 
-#define WINE_DRIVE_SUPPORT 1
-#if WINE_DRIVE_SUPPORT
-//Changes to interact with WINE by supporting their namemangling.
-//The code is rather slow, because orglist is unordered, so it needs to be avoided if possible.
-//Hence the tests in GetLongFileName
-
-
-// From the Wine project
-static Bits wine_hash_short_file_name( char* name, char* buffer )
-{
-	constexpr char hash_chars[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ012345";
-
-	// returns '_' if invalid or upper case if valid.
-	auto replace_invalid = [](char c) -> char {
-		constexpr char invalid_chars[] = {'*',
-		                                  '?',
-		                                  '<',
-		                                  '>',
-		                                  '|',
-		                                  '"',
-		                                  '+',
-		                                  '=',
-		                                  ',',
-		                                  ';',
-		                                  '[',
-		                                  ']',
-		                                  ' ',
-		                                  '\345',
-		                                  '~',
-		                                  '.',
-		                                  '\0'};
-		const auto is_invalid = char_is_negative(c) ||
-		                        strchr(invalid_chars, c);
-		return is_invalid ? '_' : toupper(c);
-	};
-
-	char *p = nullptr;
-	char *ext = nullptr;
-	char *end = name + strlen(name);
-	char *dst = nullptr;
-	uint16_t hash = 0;
-	int i = 0;
-
-	// Compute the hash code of the file name
-	for (p = name, hash = 0xbeef; p < end - 1; p++)
-		hash = (hash<<3) ^ (hash>>5) ^ tolower(*p) ^ (tolower(p[1]) << 8);
-	hash = (hash<<3) ^ (hash>>5) ^ tolower(*p); // Last character
-
-	// Find last dot for start of the extension
-	for (p = name + 1, ext = nullptr; p < end - 1; p++) if (*p == '.') ext = p;
-
-	// Copy first 4 chars, replacing invalid chars with '_'
-	for (i = 4, p = name, dst = buffer; i > 0; i--, p++)
-	{
-		if (p == end || p == ext) {
-			break;
-		}
-		*dst++ = replace_invalid(*p);
-	}
-	// Pad to 5 chars with '~'
-	while (i-- >= 0)
-		*dst++ = '~';
-
-	// Insert hash code converted to 3 ASCII chars
-	*dst++ = hash_chars[(hash >> 10) & 0x1f];
-	*dst++ = hash_chars[(hash >> 5) & 0x1f];
-	*dst++ = hash_chars[hash & 0x1f];
-
-	// Copy the first 3 chars of the extension (if any)
-	if (ext) {
-		*dst++ = '.';
-		for (i = 3, ext++; (i > 0) && ext < end; i--, ext++) {
-			*dst++ = replace_invalid(*ext);
-		}
-	}
-
-	return dst - buffer;
-}
-#endif
-
 Bits DOS_Drive_Cache::GetLongName(CFileInfo* curDir, char* shortName, const size_t shortName_len) {
 	std::vector<CFileInfo*>::size_type filelist_size = curDir->fileList.size();
 	if (filelist_size <= 0) {
@@ -553,10 +474,10 @@ Bits DOS_Drive_Cache::GetLongName(CFileInfo* curDir, char* shortName, const size
 	RemoveTrailingDot(shortName);
 	// Search long name and return array number of element
 	Bits low	= 0;
-	Bits high	= (Bits)(filelist_size-1);
+	auto high	= (Bits)(filelist_size-1);
 	Bits mid,res;
 	while (low<=high) {
-		mid = (low+high)/2;
+		mid = std::midpoint(low, high);
 		res = strcmp(shortName,curDir->fileList[mid]->shortname);
 		if (res>0)	low  = mid+1; else
 		if (res<0)	high = mid-1; else
@@ -565,22 +486,9 @@ Bits DOS_Drive_Cache::GetLongName(CFileInfo* curDir, char* shortName, const size
 			return mid;
 		};
 	}
-#ifdef WINE_DRIVE_SUPPORT
-	if (strlen(shortName) < 8 || shortName[4] != '~' || shortName[5] == '.' || shortName[6] == '.' || shortName[7] == '.') return -1; // not available
-	// else it's most likely a Wine style short name ABCD~###, # = not dot  (length at least 8) 
-	// The above test is rather strict as the following loop can be really slow if filelist_size is large.
-	char buff[CROSS_LEN];
-	for (Bitu i = 0; i < filelist_size; i++) {
-		res = wine_hash_short_file_name(curDir->fileList[i]->orgname,buff);
-		buff[res] = 0;
-		if (!strcmp(shortName,buff)) {	
-			// Found
-			safe_strncpy(shortName, curDir->fileList[i]->orgname, shortName_len);
-			return (Bits)i;
-		}
-	}
-#endif
 	// not available
+	const std::string host_name = dos_437_to_fs_utf8(shortName);
+	safe_strncpy(shortName, host_name.c_str(), shortName_len);
 	return -1;
 }
 
@@ -599,10 +507,8 @@ void DOS_Drive_Cache::CreateShortName(CFileInfo* curDir, CFileInfo* info) {
 	Bits	len			= 0;
 	bool	createShort = false;
 
-	// Remove Spaces
-	char tmpNameBuffer[CROSS_LEN];
-	safe_strcpy(tmpNameBuffer, info->orgname);
-	char* tmpName = tmpNameBuffer;
+	std::string dos_name = fs_utf8_to_dos_437(info->orgname);
+	char* tmpName = dos_name.data();
 	upcase(tmpName);
 	createShort = RemoveSpaces(tmpName);
 
@@ -672,30 +578,6 @@ void DOS_Drive_Cache::CreateShortName(CFileInfo* curDir, CFileInfo* info) {
 			strncat(info->shortname, pos, 4 < remaining_space ? 4 : remaining_space);
 			info->shortname[DOS_NAMELENGTH] = 0;
 		}
-
-		// keep list sorted for CreateShortNameID to work correctly
-		if (!curDir->longNameList.empty()) {
-			if (!(strcmp(info->shortname,curDir->longNameList.back()->shortname)<0)) {
-				// append at end of list
-				curDir->longNameList.push_back(info);
-			} else {
-				// look for position where to insert this element
-				bool found=false;
-				std::vector<CFileInfo*>::iterator it;
-				for (it=curDir->longNameList.begin(); it!=curDir->longNameList.end(); ++it) {
-					if (strcmp(info->shortname,(*it)->shortname)<0) {
-						found = true;
-						break;
-					}
-				}
-				// Put it in longname list...
-				if (found) curDir->longNameList.insert(it,info);
-				else curDir->longNameList.push_back(info);
-			}
-		} else {
-			// empty file list, append
-			curDir->longNameList.push_back(info);
-		}
 	} else {
 		safe_strcpy(info->shortname, tmpName);
 	}
@@ -743,8 +625,12 @@ DOS_Drive_Cache::CFileInfo* DOS_Drive_Cache::FindDirInfo(const char* path, char*
 	do {
 		pos = strchr(start,CROSS_FILESPLIT);
 		if (pos) {
-			safe_strncpy(dir, start,
-			             static_cast<unsigned int>(pos - start) < sizeof(dir) ? pos - start + 1 : sizeof(dir));
+			safe_strncpy(dir, //-V220
+			             start,
+			             static_cast<unsigned int>(pos - start) <
+			                             sizeof(dir)
+			                     ? pos - start + 1
+			                     : sizeof(dir));
 		}
 		else {
 			safe_strcpy(dir, start);
@@ -815,7 +701,7 @@ bool DOS_Drive_Cache::OpenDir(CFileInfo* dir, const char* expand, uint16_t& id) 
 	// open dir
 	if (dirSearch[id]) {
 		// open dir
-		dir_information* dirp = open_directory(expandcopy);
+		DirInformation* dirp = open_directory(expandcopy);
 		if (dirp || dir->isOverlayDir) { 
 			// Reset it..
 			if (dirp) close_directory(dirp);
@@ -831,7 +717,7 @@ bool DOS_Drive_Cache::OpenDir(CFileInfo* dir, const char* expand, uint16_t& id) 
 }
 
 void DOS_Drive_Cache::CreateEntry(CFileInfo* dir, const char* name, bool is_directory) {
-	CFileInfo* info = new CFileInfo;
+	auto info = new CFileInfo;
 	safe_strcpy(info->orgname, name);
 	info->shortNr = 0;
 	info->isDir = is_directory;
@@ -866,7 +752,7 @@ void DOS_Drive_Cache::CreateEntry(CFileInfo* dir, const char* name, bool is_dire
 }
 
 void DOS_Drive_Cache::CopyEntry(CFileInfo* dir, CFileInfo* from) {
-	CFileInfo* info = new CFileInfo;
+	auto info = new CFileInfo;
 	// just copy things into new fileinfo
 	safe_strcpy(info->orgname, from->orgname);
 	safe_strcpy(info->shortname, from->shortname);
@@ -883,7 +769,7 @@ bool DOS_Drive_Cache::ReadDir(uint16_t id, char* &result) {
 
 	if (!IsCachedIn(dirSearch[id])) {
 		// Try to open directory
-		dir_information* dirp = open_directory(dirPath);
+		DirInformation* dirp = open_directory(dirPath);
 		if (!dirp) {
 			if (dirSearch[id]) {
 				dirSearch[id]->id = MAX_OPENDIRS;

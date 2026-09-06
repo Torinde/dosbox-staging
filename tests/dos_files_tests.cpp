@@ -18,7 +18,7 @@
  * 4. Additional dosbox-staging headers (if needed)
  */
 
-#include "dos/dos_inc.h"
+#include "dos/dos.h"
 
 #include <iterator>
 #include <string>
@@ -264,7 +264,7 @@ TEST_F(DOS_FilesTest, DOS_MakeName_Colon_Illegal_Paths)
 // ensures a fix for dark forces installer
 TEST_F(DOS_FilesTest, DOS_FindFirst_Ending_Slash)
 {
-	// `dos` comes from dos_inc.h
+	// `dos` comes from dos.h
 	dos.errorcode = DOSERR_NONE;
 	EXPECT_FALSE(DOS_FindFirst("Z:\\DARK\\LFD\\", FatAttributeFlags::Volume, false));
 	EXPECT_EQ(dos.errorcode, DOSERR_NO_MORE_FILES);
@@ -341,6 +341,68 @@ TEST_F(DOS_FilesTest, VFILE_Register)
 	EXPECT_FALSE(DOS_FindFirst("Z:\\TEST\\FILENA~3.TXT", 0, false));
 	VFILE_Register("filename_3.txt", nullptr, 0, "/TEST/");
 	EXPECT_TRUE(DOS_FindFirst("Z:\\TEST\\FILENA~3.TXT", 0, false));
+}
+
+// Use shared_ptr instead of unique_ptr as the time cache depends on
+// std::enable_shared_from_this which will matter for certains tests
+static std::shared_ptr<localDrive> create_local_drive(const char* path)
+{
+	// I was not able to actually run MOUNT.COM inside the test enviornment.
+	// These are the default parameters as set by the mount command.
+	// They were retrieved from a debugger by setting a breakpoint inside the constructor.
+	constexpr uint16_t BytesSector = 512;
+	constexpr uint8_t SectorsCluster = 32;
+	constexpr uint16_t TotalClusters = 32765;
+	constexpr uint16_t FreeClusters = 16000;
+	constexpr uint8_t MediaId = 248;
+	constexpr bool ReadOnly = false;
+	constexpr bool AlwaysOpenRoFiles = true;
+
+	return std::make_shared<localDrive>(
+		path,
+		BytesSector,
+		SectorsCluster,
+		TotalClusters,
+		FreeClusters,
+		MediaId,
+		ReadOnly,
+		AlwaysOpenRoFiles
+	);
+}
+
+TEST_F(DOS_FilesTest, SetDate_LocalDrive)
+{
+	const auto temp_handle = create_native_file("tests/files/paths/date.txt", {});
+	ASSERT_NE(temp_handle, InvalidNativeFileHandle);
+	close_native_file(temp_handle);
+
+	auto local_drive = create_local_drive("tests/files/paths/");
+
+	// Open read-only and test that we can still set the date.
+	auto local_file = local_drive->FileOpen("date.txt", OPEN_READ);
+	ASSERT_NE(local_file, nullptr);
+
+	const auto time = DOS_PackTime(4, 20, 0);
+	const auto date = DOS_PackDate(1995, 1, 1);
+
+	// This simulates DOS_SetFileDate()
+	// We can't actually call that function inside the test enviornment
+	// because it relies on PSP enviornment variables.
+	local_file->time = time;
+	local_file->date = date;
+	local_file->flush_time_on_close = FlushTimeOnClose::ManuallySet;
+
+	local_file->Close();
+	local_file.reset();
+	local_drive.reset();
+
+	// On close, the new time/date should be written out to the host filesystem.
+	const auto native_handle = open_native_file("tests/files/paths/date.txt", false);
+	ASSERT_NE(native_handle, InvalidNativeFileHandle);
+	const auto date_time = get_dos_file_time(native_handle);
+	ASSERT_EQ(date_time.date, date);
+	ASSERT_EQ(date_time.time, time);
+	ASSERT_TRUE(delete_native_file("tests/files/paths/date.txt"));
 }
 
 } // namespace

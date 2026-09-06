@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText:  2021-2026 The DOSBox Staging Team
 // SPDX-FileCopyrightText:  2002-2021 The DOSBox Team
 // SPDX-License-Identifier: GPL-2.0-or-later
 
@@ -12,7 +13,8 @@
 #include <unordered_set>
 #include <vector>
 
-#include "dos/dos_inc.h"
+#include "config/setup.h"
+#include "dos/dos.h"
 #include "dos/dos_system.h"
 
 // GCC throws a warning about non-virtual destructor for std::enable_shared_from_this
@@ -46,6 +48,7 @@ public:
 	static void RegisterFilesystemImage(const int drive,
 	                                    std::shared_ptr<DOS_Drive> filesystem_image);
 
+	static const filesystem_images_t& GetFilesystemImages(int drive);
 	static void InitializeDrive(int drive);
 	static int UnmountDrive(int drive);
 //	static void CycleDrive(bool pressed);
@@ -53,7 +56,8 @@ public:
 	static void CycleDisks(int drive, bool notify);
 	static void CycleAllDisks(void);
 	static char *GetDrivePosition(int drive);
-	static void Init(Section* sec);
+
+	static void Init();
 
 private:
 	static drive_infos_t drive_infos;
@@ -106,6 +110,7 @@ protected:
 private:
 	void MaybeLogFilesystemProtection(const std::string& filename);
 	bool FileIsReadOnly(const char* name);
+	bool FileOrDriveIsReadOnly(const char* name);
 	const bool readonly;
 	const bool always_open_ro_files;
 	std::unordered_set<std::string> write_protected_files;
@@ -174,15 +179,13 @@ struct partTable {
 #ifdef _MSC_VER
 #pragma pack ()
 #endif
-//Forward
-class imageDisk;
 
 // Must be constructed with a shared_ptr or it will throw an exception on internal call to shared_from_this()
 class fatDrive final : public DOS_Drive, public std::enable_shared_from_this<fatDrive> {
 public:
 	fatDrive(const char* sysFilename, uint32_t bytesector,
 	         uint32_t cylsector, uint32_t headscyl, uint32_t cylinders,
-	         bool roflag);
+	         uint8_t mediaid, bool roflag);
 	fatDrive(const fatDrive&)            = delete; // prevent copying
 	fatDrive& operator=(const fatDrive&) = delete; // prevent assignment
 	std::unique_ptr<DOS_File> FileOpen(const char* name, uint8_t flags) override;
@@ -238,7 +241,8 @@ private:
 	bool addDirectoryEntry(uint32_t dirClustNumber, direntry useEntry);
 	void zeroOutCluster(uint32_t clustNumber);
 	bool getEntryName(const char *fullname, char *entname);
-	
+
+	uint8_t mediaid;
 	bootstrap bootbuffer;
 	bool absolute;
 	bool readonly;
@@ -336,13 +340,8 @@ struct isoDirEntry {
 #pragma pack ()
 #endif
 
-#if defined (WORDS_BIGENDIAN)
-#define EXTENT_LOCATION(de)	((de).extentLocationM)
-#define DATA_LENGTH(de)		((de).dataLengthM)
-#else
 #define EXTENT_LOCATION(de)	((de).extentLocationL)
 #define DATA_LENGTH(de)		((de).dataLengthL)
-#endif
 
 #define ISO_FRAMESIZE		2048
 #define ISO_ASSOCIATED		4
@@ -361,7 +360,7 @@ class isoDrive final : public DOS_Drive, public std::enable_shared_from_this<iso
 public:
 	isoDrive(char driveLetter, const char* device_name, uint8_t mediaid,
 	         int& error);
-	~isoDrive() override;
+	~isoDrive() override = default;
 	std::unique_ptr<DOS_File> FileOpen(const char* name, uint8_t flags) override;
 	std::unique_ptr<DOS_File> FileCreate(const char* name,
 	                                     FatAttributeFlags attributes) override;
@@ -493,7 +492,7 @@ public:
 	bool Rename(const char* oldname, const char* newname) override;
 	void EmptyCache(void) override;
 
-	std::pair<NativeFileHandle, std_fs::path> create_file_in_overlay(
+	std::pair<NativeFileHandle, std::string> create_file_in_overlay(
 	        const char* dos_filename, const FatAttributeFlags attributes);
 
 	Bits UnMount(void) override;
@@ -536,4 +535,6 @@ private:
 
 #pragma GCC diagnostic pop
 
-#endif
+void DRIVES_Init();
+
+#endif // DOSBOX_DRIVES_H

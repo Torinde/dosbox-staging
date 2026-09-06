@@ -46,13 +46,13 @@ function set_build_version(gh_api_artifacts, os_name) {
         // Extract version and Git hash from the artifact name.
         // Examples of valid artifact names:
         //
-        //   dosbox-staging-linux-x86_64-0.82.0-alpha-7342e
-        //   dosbox-staging-macOS-universal-0.82.0-alpha-7342e
-        //   dosbox-staging-windows-x64-0.82.0-alpha-7342e
+        //   dosbox-staging-linux-x86_64-0.84.0-RC1-c9524
+        //   dosbox-staging-macOS-universal-0.84.0-RC1-c9524
+        //   dosbox-staging-windows-x64-0.84.0-alpha-7342e
         //
         let platform_re = "[\\w-]*"
-        let version_re  = "(\\d+\.\\d+\.\\d+)"
-        let hash_re     = "([\\w-\.]+)"
+        let version_re  = "(\\d+\\.\\d+\\.\\d+)"
+        let hash_re     = "((?:alpha|RC\\d*|rc\\d*)-[\\w]{5})"
 
         let re = `dosbox-staging-${platform_re}-${version_re}-${hash_re}`
         let release = data.artifacts.find(a => a.name.match(re))
@@ -139,7 +139,14 @@ function set_ci_status(workflow_file, os_name, description) {
         build_link_tr_el.appendChild(build_link)
 
         let build_date = new Date(status.updated_at)
-        get_build_date_el(os_name).textContent = build_date.toUTCString()
+
+        let date_string_utc = new Intl.DateTimeFormat('en-GB', {
+            timeZone: 'UTC', timeZoneName: 'short',
+            year: 'numeric', month: 'short', day: '2-digit',
+            hour: '2-digit', minute: '2-digit', second: '2-digit'
+        }).format(build_date);
+
+        get_build_date_el(os_name).textContent = date_string_utc
 
         set_build_version(status.artifacts_url, os_name)
       })
@@ -150,9 +157,9 @@ function set_ci_status(workflow_file, os_name, description) {
 }
 
 document.addEventListener("DOMContentLoaded", () => {
-  set_ci_status("windows.yml", "windows", "Windows ¹")
-  set_ci_status("macos.yml",   "macos",   "macOS ²")
-  set_ci_status("linux.yml",   "linux",   "Linux ³")
+  set_ci_status("windows.yml", "windows", "Windows")
+  set_ci_status("macos.yml",   "macos",   "macOS")
+  set_ci_status("linux.yml",   "linux",   "Linux")
 })
 
 </script>
@@ -161,18 +168,30 @@ document.addEventListener("DOMContentLoaded", () => {
 !!! warning
 
     These are unstable development snapshots intended for testing and
-    showcasing new features; if you want to download a stable build, head on
-    to the [Windows](windows.md), [macOS](macos.md), or [Linux](linux.md)
-    download pages.
+    showcasing new features. Things might blow up! :bomb: :fire: :skull:
 
-    Build artifacts are hosted on GitHub; you need to be logged in to GitHub
-    to download them.
+    Less adventurous users wanting to download the latest stable build should
+    head on to the [Windows](windows.md), [macOS](macos.md), or
+    [Linux](linux.md) download pages.
+
+
+!!! info
+
+    The **development builds** are hosted on GitHub; you'll need a GitHub
+    account to download them. If you're not logged in to GitHub, you will see
+    the build artifacts, but clicking on their names won't initiate the
+    download.
+
+    We release a new dev snapshot build whenever a PR is merged. Make sure to
+    check out the automaticaly generated **release notes HTML** included with
+    the snapshot builds. This lists all the changes since the last stable
+    release, with links to the individual PRs on GitHub.
 
 
 <div class="compact">
 <table>
   <tr>
-    <th style="width: 240px">Download link</th>
+    <th style="width: 240px">Download page</th>
     <th style="width: 250px">Build version</th>
     <th style="width: 300px">Date</th>
   </tr>
@@ -212,63 +231,42 @@ document.addEventListener("DOMContentLoaded", () => {
 </table>
 </div>
 
-¹ Windows builds include x86_64 installer and portable ZIP packages.
-
-² macOS builds include Intel, Apple silicon, and universal binary package.
-
-³ We provide a statically linked x86_64 Linux package (only depends
-on C/C++, ALSA, and OpenGL system libraries).
-
 
 ## Installation notes
 
 ### Windows
 
-Windows executables in snapshot packages are not signed, therefore Windows 10
-or later might prevent the program from starting.
+Windows builds include x86_64 installer (artifact name ending with `-setup`)
+and portable ZIP packages.
 
-See [this guide](windows.md#windows-defender) to learn how to
-deal with this.
+The Windows executables are not signed, therefore Windows 10 or later might
+prevent the program from starting. See [this
+guide](windows.md#windows-defender) to learn how to deal with this.
 
 
 ### macOS
 
-macOS development builds are not notarized (but the public releases are);
-Apple Gatekeeper will try to prevent the program from running.
+Please download the universal binary package named
+`dosbox-staging-macOS-universal-*`.
 
-See [this guide](macos.md#apple-gatekeeper) to learn how to deal with
-this.
+macOS development builds are not notarized (but the stable releases are);
+Apple Gatekeeper will try to prevent the program from running. See [this
+guide](macos.md#apple-gatekeeper) to learn how to deal with this.
 
 
 ### Linux
 
-The tarball contains a dynamically-linked x86-64 build; you'll need additional
-dependencies installed via your package manager.
-
-#### Fedora
-
-    sudo dnf install SDL2 SDL2_net opusfile
-
-#### Debian, Ubuntu
-
-    sudo apt install libsdl2-2.0-0 libsdl2-net-2.0-0 libopusfile0
-
-#### Arch, Manjaro
-
-    sudo pacman -S sdl2 sdl2_net opusfile
+We provide statically linked x86_64 Linux packages that only depend on C/C++,
+ALSA, and OpenGL system libraries.
 
 
-### Upgrading your primary configuration
+## How to upgrade your configuration
 
 Testing new features might require a manual reset of the configuration
 file.
 
-Since config settings might get renamed, altered, or deprecated between
-builds, it's best to let DOSBox Staging write the new default primary config
-on the first launch, then reapply your old settings manually.
-
-Start by backing up your existing primary config. This is where to find
-it on each platform:
+Start by backing up your existing primary config. These are the standard
+non-portable mode locations for each platform:
 
 <div class="compact" markdown>
 
@@ -280,31 +278,36 @@ it on each platform:
 
 </div>
 
-You can also execute DOSBox Staging with the `--printconf` option to have the
-location of the primary config printed to your console.
+In portable mode, `dosbox-staging.conf` resides in the same folder as your
+DOSBox Staging executable. 
 
-After backing up the existing primary config, simply start the new version---a
-new `dosbox-staging.conf` will be written containing the new defaults and
-updated setting descriptions.
+Alternatively, run DOSBox Staging with the `--printconf` option, which will
+print the location of the primary config to your console.
 
-!!! note "Portable mode notes"
 
-    In portable mode, `dosbox-staging.conf` resides in the same folder as your
-    DOSBox Staging executable. The migration steps for portable mode users are
-    as follows:
+### The easy way
 
-      - Unpack the new version into a _new_ folder (this is important).
-      - Create a new _empty_ `dosbox-staging.conf` file in the new folder to
-        enable portable mode.
-      - Launch the new version.
+Once you've backed up your primary config, start the new version, then run
+`config -wcd` to update the primary config. That's it!
 
-    DOSBox Staging will write the new defaults to the empty
-    `dosbox-staging.conf` file. After this, you carry over your settings from
-    the old primary config manually.
+This method will work 90% of the time, but certain setting changes cannot be
+automatically migrated. Look for deprecation warnings in the logs (in yellow
+or orange colour), then compare your current and old configs and update your
+settings accordingly.
 
-### After upgrading
+Check out the new config descriptions for guidance, and also make sure to read
+the release notes carefully --- everything you need to know about upgrading your
+settings is described there.
 
-Look for deprecation warnings in the logs (in yellow or orange colours) and
-update your configs accordingly.
 
+### The correct way
+
+The 100% correct (but more cumbersome) way is to let DOSBox Staging write the
+new default primary config on the first launch, then reapply your old settings
+manually. This is very simple: after backing up your existing primary
+config, delete it, then start the new version.
+
+For portable installations, put an _empty_ `dosbox-staging.conf` file in the
+installation folder to enable portable mode (otherwise DOSBox Staging would
+create the new default primary config in the standard non-portable location).
 

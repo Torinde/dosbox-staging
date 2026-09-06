@@ -1,21 +1,20 @@
-// SPDX-FileCopyrightText:  2019-2025 The DOSBox Staging Team
+// SPDX-FileCopyrightText:  2019-2026 The DOSBox Staging Team
 // SPDX-FileCopyrightText:  2002-2021 The DOSBox Team
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #ifndef DOSBOX_CONFIG_H
 #define DOSBOX_CONFIG_H
 
-#include "dosbox.h"
-
 #include <cassert>
 #include <deque>
 #include <functional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "config/setup.h"
-#include "dos/programs.h"
 #include "misc/std_filesystem.h"
+#include "shell/command_line.h"
 
 // clang-format off
 enum class StartupVerbosity {
@@ -34,7 +33,7 @@ struct CommandLineArguments {
 	bool list_countries;
 	bool list_layouts;
 	bool list_code_pages;
-	bool list_glshaders;
+	bool list_shaders;
 	bool version;
 	bool help;
 	bool eraseconf;
@@ -44,12 +43,14 @@ struct CommandLineArguments {
 	bool exit;
 	bool securemode;
 	bool noautoexec;
+
 	std::string working_dir;
 	std::string lang;
 	std::string machine;
 	std::vector<std::string> conf;
 	std::vector<std::string> set;
 	std::optional<std::vector<std::string>> editconf;
+
 	std::optional<int> socket;
 	std::optional<int> wait_pid;
 };
@@ -61,20 +62,20 @@ public:
 	CommandLineArguments arguments = {};
 
 private:
-	std::deque<Section*> sectionlist          = {};
-	SectionLine overwritten_autoexec_section = {};
-	std::string overwritten_autoexec_conf     = {};
+	std::deque<Section*> sections                = {};
+	AutoExecSection overwritten_autoexec_section = {};
+	std::string overwritten_autoexec_conf        = {};
 
-	void (*_start_function)(void) = nullptr;
+	std::vector<std::string> parsed_settings = {};
 
 	bool secure_mode = false;
 
 	void ParseArguments();
 
 public:
-	std::vector<std::string> startup_params        = {};
-	std::vector<std::string> configfiles           = {};
-	std::vector<std_fs::path> configFilesCanonical = {};
+	std::vector<std::string> startup_params                 = {};
+	std::vector<std::string> config_files                   = {};
+	std::vector<std_fs::path> loaded_config_paths_canonical = {};
 
 	Config(CommandLine* cmd)
 	        : cmdline(cmd),
@@ -82,59 +83,56 @@ public:
 	{
 		assert(cmdline);
 		startup_params = cmdline->GetArguments();
-		startup_params.insert(startup_params.begin(),
-		                      cmdline->GetFileName());
+		startup_params.emplace(startup_params.begin(),
+		                       cmdline->GetFileName());
 
 		ParseArguments();
 	}
 
 	Config() = default;
-	Config(Config&& source) noexcept;            // move constructor
-	Config(const Config&) = delete;              // block construct-by-value
-	Config& operator=(Config&& source) noexcept; // move assignment
-	Config& operator=(const Config&) = delete;   // block assign-by-value
+
+	// move constructor
+	Config(Config&& source) noexcept;
+
+	// prevent copying
+	Config(const Config&) = delete;
+
+	// prevent assignment assignment
+	Config& operator=(Config&& source) noexcept;
+	Config& operator=(const Config&) = delete;
 
 	~Config();
 
-	SectionProp* AddEarlySectionProp(const char* name, SectionFunction func,
-	                                  bool changeable_at_runtime = false);
-
-	SectionLine* AddSectionLine(const char* section_name, SectionFunction func);
-
-	SectionProp* AddInactiveSectionProp(const char* section_name);
-	SectionProp* AddSectionProp(const char* section_name, SectionFunction func,
-	                              bool changeable_at_runtime = false);
+	SectionProp* AddSection(const char* section_name);
+	AutoExecSection* AddAutoexecSection();
 
 	auto begin()
 	{
-		return sectionlist.begin();
+		return sections.begin();
 	}
 	auto end()
 	{
-		return sectionlist.end();
+		return sections.end();
 	}
 
 	Section* GetSection(const std::string_view section_name) const;
 	Section* GetSectionFromProperty(const char* prop) const;
 
 	void OverwriteAutoexec(const std::string& conf, const std::string& line);
-	const SectionLine& GetOverwrittenAutoexecSection() const;
+	const AutoExecSection& GetOverwrittenAutoexecSection() const;
 	const std::string& GetOverwrittenAutoexecConf() const;
 
 	void ApplyQueuedValuesToCli(std::vector<std::string>& args) const;
 
-	void SetStartUp(void (*_function)(void));
 	void Init() const;
-	void ShutDown();
-	void StartUp();
 
 	bool WriteConfig(const std_fs::path& path) const;
 	bool ParseConfigFile(const std::string& type,
 	                     const std::string& config_file_name);
 
-	void ParseEnv();
 	void ParseConfigFiles(const std_fs::path& config_path);
-	const char* SetProp(std::vector<std::string>& pvars);
+
+	std::string SetPropertyFromCli(std::vector<std::string>& parameters);
 
 	const std::string& GetArgumentLanguage();
 
@@ -149,11 +147,22 @@ public:
 	}
 
 	StartupVerbosity GetStartupVerbosity() const;
+
+	// Should be called after a config setting is parsed when reading the
+	// config files to store the setting parse order.
+	void AppendParsedSetting(const std::string& section_name,
+	                         const std::string& property_name);
+
+	// Return the parse order of the setting during reading the config files.
+	// Higher numbers means the setting was parsed later. -1 is returned if
+	// the setting wasn't set in the configs.
+	int GetSettingParseOrder(const std::string& section_name,
+	                         const std::string& property_name);
 };
 
 using ConfigPtr = std::unique_ptr<Config>;
 extern ConfigPtr control;
 
-void DOSBOX_Restart(std::vector<std::string> &parameters = control->startup_params);
+extern std_fs::path current_config_dir;
 
 #endif // DOSBOX_CONFIG_H

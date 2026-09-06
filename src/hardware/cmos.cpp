@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText:  2025-2026 The DOSBox Staging Team
 // SPDX-FileCopyrightText:  2002-2021 The DOSBox Team
 // SPDX-License-Identifier: GPL-2.0-or-later
 
@@ -5,14 +6,14 @@
 
 #include <cmath>
 #include <ctime>
+#include <memory>
 
-#include "hardware/port.h"
-#include "ints/bios_disk.h"
-#include "misc/cross.h"
-#include "hardware/timer.h"
 #include "hardware/memory.h"
 #include "hardware/pic.h"
-#include "config/setup.h"
+#include "hardware/port.h"
+#include "hardware/timer.h"
+#include "ints/bios_disk.h"
+#include "misc/cross.h"
 
 static struct {
 	uint8_t regs[0x40];
@@ -49,7 +50,9 @@ static void cmos_checktimer(void) {
 	PIC_RemoveEvents(cmos_timerevent);
 	if (cmos.timer.div<=2) cmos.timer.div+=7;
 	cmos.timer.delay = (1000.0 / (32768.0 / (1 << (cmos.timer.div - 1))));
-	if (!cmos.timer.div || !cmos.timer.enabled) return;
+	if (!cmos.timer.enabled) {
+		return;
+	}
 	LOG(LOG_PIT, LOG_NORMAL)("RTC Timer at %.2f hz", 1000.0 / static_cast<double>(cmos.timer.delay));
 	//	PIC_AddEvent(cmos_timerevent,cmos.timer.delay);
 	/* A rtc is always running */
@@ -183,7 +186,7 @@ static uint8_t cmos_readreg(io_port_t, io_width_t)
 		if (imageDiskList[1]) {
 			drive_b = imageDiskList[1]->GetBiosType();
 		}
-		return ((drive_a << 4) | (drive_b));
+		return ((drive_a << 4) | drive_b);
 	/* First harddrive info */
 	case 0x12:
 		hdparm = 0;
@@ -200,12 +203,12 @@ static uint8_t cmos_readreg(io_port_t, io_width_t)
 		}
 		return 0;
 	case 0x1b:
-		if (imageDiskList[2]) {
+		if (imageDiskList[2]) { //-V1037
 			return (imageDiskList[2]->cylinders & 0xff);
 		}
 		return 0;
 	case 0x1c:
-		if (imageDiskList[2]) {
+		if (imageDiskList[2]) { //-V1037
 			return ((imageDiskList[2]->cylinders & 0xff00) >> 8);
 		}
 		return 0;
@@ -215,7 +218,7 @@ static uint8_t cmos_readreg(io_port_t, io_width_t)
 		}
 		return 0;
 	case 0x1e:
-		if (imageDiskList[2]) {
+		if (imageDiskList[2]) { //-V1037
 			return 0xff;
 		}
 		return 0;
@@ -251,12 +254,12 @@ static uint8_t cmos_readreg(io_port_t, io_width_t)
 		}
 		return 0;
 	case 0x24:
-		if (imageDiskList[3]) {
+		if (imageDiskList[3]) { //-V1037
 			return (imageDiskList[3]->cylinders & 0xff);
 		}
 		return 0;
 	case 0x25:
-		if (imageDiskList[3]) {
+		if (imageDiskList[3]) { //-V1037
 			return ((imageDiskList[3]->cylinders & 0xff00) >> 8);
 		}
 		return 0;
@@ -266,7 +269,7 @@ static uint8_t cmos_readreg(io_port_t, io_width_t)
 		}
 		return 0;
 	case 0x27:
-		if (imageDiskList[3]) {
+		if (imageDiskList[3]) { //-V1037
 			return 0xff;
 		}
 		return 0;
@@ -322,13 +325,13 @@ void CMOS_SetRegister(Bitu regNr, uint8_t val) {
 	cmos.regs[regNr] = val;
 }
 
-
-class CMOS final : public ModuleBase{
+class CMOS {
 private:
 	IO_ReadHandleObject ReadHandler[2];
 	IO_WriteHandleObject WriteHandler[2];
 public:
-	CMOS(Section* configuration):ModuleBase(configuration){
+	CMOS()
+	{
 		constexpr io_port_t port_0x70 = 0x70;
 		constexpr io_port_t port_0x71 = 0x71;
 
@@ -360,18 +363,14 @@ public:
 	}
 };
 
-static CMOS* test;
+static std::unique_ptr<CMOS> cmos_module = {};
 
-void CMOS_Destroy(Section* /*sec*/){
-	delete test;
+void CMOS_Init()
+{
+	cmos_module = std::make_unique<CMOS>();
 }
 
-void CMOS_Init(Section* sec)
+void CMOS_Destroy()
 {
-	assert(sec);
-
-	test = new CMOS(sec);
-
-	constexpr auto changeable_at_runtime = false;
-	sec->AddDestroyFunction(&CMOS_Destroy, changeable_at_runtime);
+	cmos_module = {};
 }

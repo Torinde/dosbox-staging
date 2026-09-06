@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText:  2021-2025 The DOSBox Staging Team
+// SPDX-FileCopyrightText:  2021-2026 The DOSBox Staging Team
 // SPDX-FileCopyrightText:  2002-2021 The DOSBox Team
 // SPDX-License-Identifier: GPL-2.0-or-later
 
@@ -62,18 +62,19 @@ void AddCommonMountMessages() {
 	MSG_Add("MSCDEX_ERROR_PATH","MSCDEX: Specified location is not a CD-ROM drive.\n");
 	MSG_Add("MSCDEX_ERROR_OPEN","MSCDEX: Failure: Invalid file or unable to open.\n");
 	MSG_Add("MSCDEX_TOO_MANY_DRIVES","MSCDEX: Failure: Too many CD-ROM drives (max: 5). MSCDEX Installation failed.\n");
-	MSG_Add("MSCDEX_LIMITED_SUPPORT","MSCDEX: Mounted subdirectory: limited support.\n");
+	MSG_Add("MSCDEX_LIMITED_SUPPORT","MSCDEX: Mounted subdirectory: limited support.");
 	MSG_Add("MSCDEX_INVALID_FILEFORMAT","MSCDEX: Failure: File is either no ISO/CUE image or contains errors.\n");
 	MSG_Add("MSCDEX_UNKNOWN_ERROR","MSCDEX: Failure: Unknown error.\n");
 	MSG_Add("MSCDEX_WARNING_NO_OPTION", "MSCDEX: Warning: Ignoring unsupported option '%s'.\n");
 
 	MSG_Add("PROGRAM_MOUNT_STATUS_DRIVE", "Drive");
 	MSG_Add("PROGRAM_MOUNT_STATUS_TYPE", "Type");
+	MSG_Add("PROGRAM_MOUNT_STATUS_PATH", "Path");
 	MSG_Add("PROGRAM_MOUNT_STATUS_LABEL", "Label");
 	MSG_Add("PROGRAM_MOUNT_STATUS_NAME", "Image name");
 	MSG_Add("PROGRAM_MOUNT_STATUS_SLOT", "Swap slot");
+	MSG_Add("PROGRAM_MOUNT_RESULT", "%s mounted as %c drive:\n%s");
 	MSG_Add("PROGRAM_MOUNT_STATUS_2", "%s mounted as %c drive\n");
-	MSG_Add("PROGRAM_MOUNT_STATUS_1", "The currently mounted drives are:\n");
 	MSG_Add("PROGRAM_MOUNT_READONLY", "Mounted read-only\n");
 }
 
@@ -81,7 +82,10 @@ void AddMountTypeMessages() {
 	MSG_Add("MOUNT_TYPE_LOCAL_DIRECTORY", "Local directory");
 	MSG_Add("MOUNT_TYPE_CDROM", "CD-ROM drive");
 	MSG_Add("MOUNT_TYPE_FAT", "FAT image");
-	MSG_Add("MOUNT_TYPE_ISO", "ISO image");
-	MSG_Add("MOUNT_TYPE_VIRTUAL", "Internal virtual drive");
+	MSG_Add("MOUNT_TYPE_FAT_PLURAL", "FAT images");
+	MSG_Add("MOUNT_TYPE_CDIMAGE", "CD-ROM image");
+	MSG_Add("MOUNT_TYPE_CDIMAGE_PLURAL", "CD-ROM images");
+	MSG_Add("MOUNT_TYPE_VIRTUAL", "Internal drive");
+	MSG_Add("MOUNT_TYPE_OVERLAY", "Overlay drive");
 	MSG_Add("MOUNT_TYPE_UNKNOWN", "unknown drive");
 }

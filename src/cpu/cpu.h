@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText:  2021-2025 The DOSBox Staging Team
+// SPDX-FileCopyrightText:  2021-2026 The DOSBox Staging Team
 // SPDX-FileCopyrightText:  2002-2021 The DOSBox Team
 // SPDX-License-Identifier: GPL-2.0-or-later
 
@@ -7,14 +7,16 @@
 
 #include "dosbox.h"
 
+#include <string>
+
 #include "config/config.h"
 #include "misc/support.h"
 
 #ifndef DOSBOX_REGS_H
-	#include "cpu/registers.h"
+#include "cpu/registers.h"
 #endif
 #ifndef DOSBOX_MEM_H
-	#include "hardware/memory.h"
+#include "hardware/memory.h"
 #endif
 
 constexpr auto CpuCyclesMin = 50;
@@ -57,7 +59,30 @@ struct CpuAutoDetermineMode {
 extern ArchitectureType CPU_ArchitectureType;
 extern Bitu CPU_PrefetchQueueSize;
 
+inline bool is_cpu_286_or_better()
+{
+	return CPU_ArchitectureType >= ArchitectureType::Intel286;
+}
+
+inline bool is_cpu_386_or_better()
+{
+	return CPU_ArchitectureType >= ArchitectureType::Intel386Slow;
+}
+
+inline bool is_cpu_486_or_better()
+{
+	return CPU_ArchitectureType >= ArchitectureType::Intel486OldSlow;
+}
+
+inline bool is_cpu_586_or_better()
+{
+	return CPU_ArchitectureType >= ArchitectureType::Pentium;
+}
+
 void CPU_AddConfigSection(const ConfigPtr& conf);
+
+void CPU_Init();
+void CPU_Destroy();
 
 uint8_t CPU_GetLastInterrupt();
 
@@ -240,24 +265,10 @@ void CPU_Push32(const uint32_t value);
 #define DESC_CODE_R_C_NA  0x1f
 
 #ifdef _MSC_VER
-	#pragma pack(1)
+#pragma pack(1)
 #endif
 
 struct S_Descriptor {
-#ifdef WORDS_BIGENDIAN
-	uint32_t base_0_15 : 16;
-	uint32_t limit_0_15 : 16;
-	uint32_t base_24_31 : 8;
-	uint32_t g : 1;
-	uint32_t big : 1;
-	uint32_t r : 1;
-	uint32_t avl : 1;
-	uint32_t limit_16_19 : 4;
-	uint32_t p : 1;
-	uint32_t dpl : 2;
-	uint32_t type : 5;
-	uint32_t base_16_23 : 8;
-#else
 	uint32_t limit_0_15 : 16;
 	uint32_t base_0_15 : 16;
 	uint32_t base_16_23 : 8;
@@ -270,20 +281,9 @@ struct S_Descriptor {
 	uint32_t big : 1;
 	uint32_t g : 1;
 	uint32_t base_24_31 : 8;
-#endif
 } GCC_ATTRIBUTE(packed);
 
 struct G_Descriptor {
-#ifdef WORDS_BIGENDIAN
-	uint32_t selector : 16;
-	uint32_t offset_0_15 : 16;
-	uint32_t offset_16_31 : 16;
-	uint32_t p : 1;
-	uint32_t dpl : 2;
-	uint32_t type : 5;
-	uint32_t reserved : 3;
-	uint32_t paramcount : 5;
-#else
 	uint32_t offset_0_15 : 16;
 	uint32_t selector : 16;
 	uint32_t paramcount : 5;
@@ -292,7 +292,6 @@ struct G_Descriptor {
 	uint32_t dpl : 2;
 	uint32_t p : 1;
 	uint32_t offset_16_31 : 16;
-#endif
 } GCC_ATTRIBUTE(packed);
 
 struct TSS_16 {
@@ -337,12 +336,14 @@ struct TSS_32 {
 } GCC_ATTRIBUTE(packed);
 
 #ifdef _MSC_VER
-	#pragma pack()
+#pragma pack()
 #endif
 class Descriptor {
 public:
 	Descriptor()
-	        : saved{{0, 0}}
+	        : saved{
+	                  {0, 0}
+        }
 	{}
 
 	void Load(PhysPt address);
@@ -433,7 +434,7 @@ public:
 	{
 		selector &= ~7ul;
 		const auto nonbitu_selector = check_cast<PhysPt>(selector);
-		if (selector >= table_limit) {
+		if (selector >= table_limit) { //-V1051
 			return false;
 		}
 		desc.Load(table_base + nonbitu_selector);
@@ -539,13 +540,13 @@ public:
 
 struct CPUBlock {
 	// Current privilege
-	Bitu cpl; 
+	Bitu cpl;
 
 	Bitu mpl;
 	Bitu cr0;
 
 	// Is protected mode enabled
-	bool pmode; 
+	bool pmode;
 
 	GDTDescriptorTable gdt;
 	DescriptorTable idt;
@@ -579,5 +580,9 @@ extern CPUBlock cpu;
 void CPU_SetFlags(const uint32_t word, uint32_t mask);
 void CPU_SetFlagsd(const uint32_t word);
 void CPU_SetFlagsw(const uint32_t word);
+
+// Whether the emulator should execute HLT instruction upon detecting the guest
+// program is idle
+bool CPU_ShouldHltOnIdle();
 
 #endif

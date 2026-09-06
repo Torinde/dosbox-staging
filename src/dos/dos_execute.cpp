@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText:  2021-2025 The DOSBox Staging Team
+// SPDX-FileCopyrightText:  2021-2026 The DOSBox Staging Team
 // SPDX-FileCopyrightText:  2002-2021 The DOSBox Team
 // SPDX-License-Identifier: GPL-2.0-or-later
 
@@ -9,16 +9,17 @@
 
 #include "cpu/callback.h"
 #include "cpu/cpu.h"
-#include "debugger/debugger.h"
-#include "dos_inc.h"
-#include "hardware/vmware.h"
-#include "hardware/memory.h"
 #include "cpu/paging.h"
-#include "programs/setver.h"
-#include "dos/programs.h"
 #include "cpu/registers.h"
-#include "utils/string_utils.h"
+#include "debugger/debugger.h"
+#include "dos.h"
+#include "dos/programs.h"
+#include "gui/titlebar.h"
+#include "hardware/memory.h"
+#include "hardware/vmware.h"
 #include "misc/video.h"
+#include "programs/setver.h"
+#include "utils/string_utils.h"
 
 #ifdef _MSC_VER
 #pragma pack(1)
@@ -82,7 +83,7 @@ void DOS_UpdateCurrentProgramName()
 		}
 	}
 
-	GFX_NotifyProgramName(segment_name, canonical_name);
+	TITLEBAR_NotifyProgramName(segment_name, canonical_name);
 	VMWARE_NotifyProgramName(segment_name);
 }
 
@@ -116,7 +117,7 @@ void DOS_Terminate(const uint16_t psp_seg, const bool is_terminate_and_stay_resi
 	erase_canonical_name(psp_seg);
 
 	dos.return_code = exit_code;
-	dos.return_mode = (is_terminate_and_stay_resident)
+	dos.return_mode = is_terminate_and_stay_resident
 	                        ? DosReturnMode::TerminateAndStayResident
 	                        : DosReturnMode::Exit;
 
@@ -254,11 +255,15 @@ bool DOS_ChildPSP(uint16_t segment, uint16_t size) {
 
 static void setup_psp(uint16_t pspseg, uint16_t memsize, uint16_t envseg)
 {
-	/* Fix the PSP for psp and environment MCB's */
-	DOS_MCB mcb((uint16_t)(pspseg-1));
-	mcb.SetPSPSeg(pspseg);
-	mcb.SetPt((uint16_t)(envseg-1));
-	mcb.SetPSPSeg(pspseg);
+	// Mark PSP's MCB as owned by this PSP
+	DOS_MCB psp_mcb(uint16_t(pspseg - 1));
+	psp_mcb.SetPSPSeg(pspseg);
+
+	// Mark environment's MCB (if any) as owned by this PSP
+	if (envseg != 0) {
+		DOS_MCB env_mcb(uint16_t(envseg - 1));
+		env_mcb.SetPSPSeg(pspseg);
+	}
 
 	DOS_PSP psp(pspseg);
 	psp.MakeNew(memsize);
@@ -319,7 +324,7 @@ bool DOS_Execute(char * name,PhysPt block_pt,uint8_t flags) {
 		iscom=true;
 	} else {
 		/* Convert the header to correct endian, i hope this works */
-		HostPt endian=(HostPt)&head;
+		auto endian=(HostPt)&head;
 		for (i=0;i<sizeof(EXE_Header)/2;i++) {
 			*((uint16_t *)endian)=host_readw(endian);
 			endian+=2;
@@ -334,7 +339,7 @@ bool DOS_Execute(char * name,PhysPt block_pt,uint8_t flags) {
 			if (imagesize+headersize<512) imagesize = 512-headersize;
 		}
 	}
-	uint8_t *loadbuf = new uint8_t[0x10000];
+	auto loadbuf = new uint8_t[0x10000];
 	if (flags!=OVERLAY) {
 		/* Create an environment block */
 		envseg=block.exec.envseg;
@@ -444,11 +449,15 @@ bool DOS_Execute(char * name,PhysPt block_pt,uint8_t flags) {
 	}
 	RealPt csip,sssp;
 	if (iscom) {
-		csip=RealMake(pspseg,0x100);
-		if (memsize<0x1000) {
-			LOG(LOG_EXEC,LOG_WARN)("COM format with only %X paragraphs available",memsize);
+		csip = RealMake(pspseg, 0x100); //-V614
+		if (memsize < 0x1000) {         //-V614
+			LOG(LOG_EXEC,
+			    LOG_WARN)("COM format with only %X paragraphs available",
+			              memsize);
 			sssp=RealMake(pspseg,(memsize<<4)-2);
-		} else sssp=RealMake(pspseg,0xfffe);
+		} else {
+			sssp = RealMake(pspseg, 0xfffe);
+		}
 		mem_writew(RealToPhysical(sssp),0);
 	} else {
 		csip=RealMake(loadseg+head.initCS,head.initIP);
@@ -461,8 +470,9 @@ bool DOS_Execute(char * name,PhysPt block_pt,uint8_t flags) {
 		CONSOLE_ResetLastWrittenChar('\0');
 	}
 
-	if ((flags==LOAD) || (flags==LOADNGO)) {
-		/* Get Caller's program CS:IP of the stack and set termination address to that */
+	if ((flags == LOAD) || (flags == LOADNGO)) { //-V560
+		/* Get Caller's program CS:IP of the stack and set termination
+		 * address to that */
 		RealSetVec(0x22,RealMake(real_readw(SegValue(ss),reg_sp+2),real_readw(SegValue(ss),reg_sp)));
 		reg_sp-=18;
 		DOS_PSP callpsp(dos.psp());
@@ -533,7 +543,7 @@ bool DOS_Execute(char * name,PhysPt block_pt,uint8_t flags) {
 		return true;
 	}
 
-	if (flags==LOADNGO) {
+	if (flags == LOADNGO) { //-V547
 		if ((reg_sp>0xfffe) || (reg_sp<18)) LOG(LOG_EXEC,LOG_ERROR)("stack underflow/wrap at EXEC");
 		/* Set the stack for new program */
 		SegSet16(ss,RealSegment(sssp));reg_sp=RealOffset(sssp);
@@ -621,10 +631,10 @@ std::optional<uint16_t> DOS_CreateFakeTsrArea(const uint32_t bytes,
 
 	// Clear the TSR memory
 	const auto start_segment = tsr_psp_segment + PspSegments;
-	for (auto idx = start_segment; idx < blocks - PspSegments; idx++) {
-		// 16 bytes to clear, use two 8-byte writes
-		mem_writeq(PhysicalMake(idx, sizeof(uint64_t) * 0), 0);
-		mem_writeq(PhysicalMake(idx, sizeof(uint64_t) * 1), 0);
+	const auto end_segment   = tsr_psp_segment + blocks;
+	for (auto seg = start_segment; seg < end_segment; ++seg) {
+		mem_writeq(PhysicalMake(seg, sizeof(uint64_t) * 0), 0);
+		mem_writeq(PhysicalMake(seg, sizeof(uint64_t) * 1), 0);
 	}
 
 	// Clean up and return the free space start segment

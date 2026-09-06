@@ -1,9 +1,7 @@
-// SPDX-FileCopyrightText:  2002-2021 The DOSBox Team
+// SPDX-FileCopyrightText:  2002-2025 The DOSBox Team
 // SPDX-License-Identifier: GPL-2.0-or-later
 
-
 #include "dosbox.h"
-#if C_FPU
 
 #include "cpu/cpu.h"
 #include "misc/cross.h"
@@ -182,6 +180,8 @@ void FPU_ESC1_Normal(Bitu rm) {
 			break;
 		case 0x02:       /* UNKNOWN */
 		case 0x03:       /* ILLEGAL */
+		case 0x06:       /* FTSTP (cyrix)*/
+		case 0x07:       /* UNKNOWN */
 			FPU_LOG_WARN(1,false,group,sub);
 			break;
 		case 0x04:       /* FTST */
@@ -189,10 +189,6 @@ void FPU_ESC1_Normal(Bitu rm) {
 			break;
 		case 0x05:       /* FXAM */
 			FPU_FXAM();
-			break;
-		case 0x06:       /* FTSTP (cyrix)*/
-		case 0x07:       /* UNKNOWN */
-			FPU_LOG_WARN(1,false,group,sub);
 			break;
 		}
 		break;
@@ -602,12 +598,10 @@ void FPU_ESC7_Normal(Bitu rm) {
 	}
 }
 
-
-void FPU_Init(Section*) {
+void FPU_Init()
+{
 #if !C_FPU_X86
 	LOG_WARNING("FPU: Using reduced-precision floating-point emulation");
 #endif
 	FPU_FINIT();
 }
-
-#endif

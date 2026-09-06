@@ -8,6 +8,8 @@
 // 0.81.1-alpha)
 #define DOSBOX_VERSION "${DOSBOX_VERSION}"
 
+#define DOSBOX_VERSION_SHORT "${PROJECT_VERSION_MAJOR}.${PROJECT_VERSION_MINOR}"
+
 // Minimum 5-char long Git hash of the build; can be longer to guarantee
 // uniqueness (e.g., da3c5, c22ef8)
 #define BUILD_GIT_HASH "${BUILD_GIT_HASH}"
@@ -35,8 +37,9 @@
 //
 // These defines are mostly relevant to modules src/cpu/ and src/fpu/
 
-// The type of cpu this target has
-#cmakedefine C_TARGETCPU @C_TARGETCPU@
+// Target CPU we're compiling for; only one of these can be 1
+#cmakedefine01 C_TARGET_CPU_ARM
+#cmakedefine01 C_TARGET_CPU_X86
 
 // Define to 1 if target CPU supports unaligned memory access
 #cmakedefine01 C_UNALIGNED_MEMORY
@@ -44,21 +47,18 @@
 // Define to 1 if the target platform needs per-page dynamic core write or execute (W^X) tagging
 #cmakedefine01 C_PER_PAGE_W_OR_X
 
-// Define to 1 to use x86/x86_64 dynamic cpu core
+// Define to 1 to use the x86_64 dynamic CPU core
 // Can not be used together with C_DYNREC
 #cmakedefine01 C_DYNAMIC_X86
 
-// Define to 1 to use recompiling cpu core
+// Define to 1 to use the recompiling CPU core
 // Can not be used together with C_DYNAMIC_X86
 #cmakedefine01 C_DYNREC
 
-// Define to 1 to enable floating point emulation
-#cmakedefine01 C_FPU
-
-// Define to 1 to use  fpu core implemented in x86 assembler
+// Define to 1 to use the FPU core implemented in x86 assembler
 #cmakedefine01 C_FPU_X86
 
-// TODO Define to 1 to use inlined memory functions in cpu core
+// Define to 1 to use inlined memory functions in CPU core
 #define C_CORE_INLINE 1
 
 
@@ -68,20 +68,8 @@
 // This way it's easier to port or package on a new platform, where these
 // libraries might be missing.
 
-// Define to 1 to enable internal modem emulation (using SDL2_net)
-#cmakedefine01 C_MODEM
-
-// Define to 1 to enable IPX over Internet networking (using SDL2_net)
-#cmakedefine01 C_IPX
-
-// Enable serial port passthrough support
-#cmakedefine01 C_DIRECTSERIAL
-
 // Define to 1 to use opengl display output support
 #cmakedefine01 C_OPENGL
-
-// Define to 1 to enable the Tracy profiling server
-#cmakedefine01 C_TRACY
 
 // Define to 1 to enable internal debugger (using ncurses or pdcurses)
 #cmakedefine01 C_DEBUGGER
@@ -101,18 +89,6 @@
 // an assumption about availability based on OS type.
 #cmakedefine01 SUPPORT_XINPUT2
 
-// Compiler supports Core Audio headers
-#cmakedefine01 C_COREAUDIO
-
-// Compiler supports Core MIDI headers
-#cmakedefine01 C_COREMIDI
-
-// Compiler supports Core Foundation headers
-#cmakedefine01 C_COREFOUNDATION
-
-// Compiler supports Core Services headers
-#cmakedefine01 C_CORESERVICES
-
 // Define to 1 to enable ALSA MIDI support
 #cmakedefine01 C_ALSA
 
@@ -122,8 +98,8 @@
 // Sometimes available functions, structs, or struct fields differ slightly
 // between operating systems.
 
-// Define to 1 when zlib-ng support is provided by the system
-#cmakedefine01 C_SYSTEM_ZLIB_NG
+// Define to 1 when using the native zlib-ng API
+#cmakedefine01 C_ZLIB_NG
 
 // Defined if synchronous I/O multiplexing is available
 #cmakedefine HAVE_FD_ZERO
@@ -172,7 +148,6 @@
 
 #cmakedefine HAVE_LIBGEN_H
 #cmakedefine HAVE_NETINET_IN_H
-#cmakedefine HAVE_PWD_H
 #cmakedefine HAVE_STDLIB_H
 #cmakedefine HAVE_STRINGS_H
 #cmakedefine HAVE_SYS_SOCKET_H
@@ -180,18 +155,13 @@
 #cmakedefine HAVE_SYS_XATTR_H
 
 
-// Hardware-related defines
-//
-
-// Define to 1 when host/target processor uses big endian byte ordering
-#cmakedefine WORDS_BIGENDIAN
-
-
 // Windows-related defines
 //
 
 // Prevent <windows.h> from clobbering std::min and std::max
+#ifndef NOMINMAX
 #cmakedefine NOMINMAX 1
+#endif
 
 // Enables mathematical constants (such as M_PI) in Windows math.h header
 // https://docs.microsoft.com/en-us/cpp/c-runtime-library/math-constants

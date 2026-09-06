@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText:  2019-2025 The DOSBox Staging Team
+// SPDX-FileCopyrightText:  2019-2026 The DOSBox Staging Team
 // SPDX-FileCopyrightText:  2002-2021 The DOSBox Team
 // SPDX-License-Identifier: GPL-2.0-or-later
 
@@ -9,12 +9,12 @@
 #include <cstring>
 
 #include "cpu/callback.h"
-#include "dos/dos_inc.h"
-#include "hardware/port.h"
-#include "utils/math_utils.h"
+#include "cpu/registers.h"
+#include "dos/dos.h"
 #include "hardware/memory.h"
 #include "hardware/pci_bus.h"
-#include "cpu/registers.h"
+#include "hardware/port.h"
+#include "utils/math_utils.h"
 #include "utils/string_utils.h"
 
 #define VESA_SUCCESS          0x00
@@ -189,6 +189,50 @@ static bool can_triple_buffer_8bit(const VideoModeBlock& m)
 	return vga.vmemsize >= needed_bytes;
 }
 
+int VESA_GetModePageSize(const VideoModeBlock& mode_block)
+{
+	int page_size = 0;
+
+	switch (mode_block.type) {
+	case M_LIN4:
+		// Size of a single plane; planar modes store four planes
+		page_size = mode_block.sheight * mode_block.swidth / 8;
+		break;
+
+	case M_LIN8: page_size = mode_block.sheight * mode_block.swidth; break;
+
+	case M_LIN15:
+	case M_LIN16:
+		page_size = mode_block.sheight * mode_block.swidth * 2;
+		break;
+
+	case M_LIN24:
+		// Mode 0x212 has 128 extra bytes per scan line for
+		// compatibility with Windows 640x480 24-bit S3 Trio drivers
+		if (mode_block.mode == 0x212) {
+			page_size = mode_block.sheight *
+			            (mode_block.swidth * 3 + 128);
+		} else {
+			page_size = mode_block.sheight * (mode_block.swidth * 3);
+		}
+		break;
+
+	case M_LIN32:
+		page_size = mode_block.sheight * mode_block.swidth * 4;
+		break;
+
+	default: break;
+	}
+
+	if (page_size & 0xFFFF) {
+		// It is documented that many applications assume 64k-aligned
+		// page sizes VBETEST is one of them
+		page_size += 0x10000;
+		page_size &= ~0xFFFF;
+	}
+
+	return page_size;
+}
 
 uint8_t VESA_GetSVGAModeInformation(uint16_t mode, uint16_t seg, uint16_t off)
 {
@@ -197,7 +241,6 @@ uint8_t VESA_GetSVGAModeInformation(uint16_t mode, uint16_t seg, uint16_t off)
 
 	PhysPt buf = PhysicalMake(seg, off);
 
-	int modePageSize = 0;
 	uint8_t modeAttributes;
 
 	mode &= 0x3fff; // vbe2 compatible, ignore lfb and keep screen content bits
@@ -218,22 +261,24 @@ uint8_t VESA_GetSVGAModeInformation(uint16_t mode, uint16_t seg, uint16_t off)
 	const auto mblock = *maybe_mode_block;
 
 	// Was the found mode VESA 2.0 but the user requested VESA 1.2?
-	if (mblock.mode >= vesa_2_0_modes_start && int10.vesa_oldvbe) {
+	if (mblock.mode >= Vesa20ModesStart && int10.vesa_oldvbe) {
 		return VESA_FAIL;
 	}
 
+	const int modePageSize = VESA_GetModePageSize(mblock);
+
 	switch (mblock.type) {
 	case M_LIN4:
-		modePageSize           = mblock.sheight * mblock.swidth / 8;
 		minfo.BytesPerScanLine = host_to_le16(mblock.swidth / 8);
 		minfo.NumberOfPlanes   = 0x4;
 		minfo.BitsPerPixel     = 4u;
 		minfo.MemoryModel      = 3u; // ega planar mode
-		modeAttributes = 0x1b; // Color, graphics, no linear buffer
+
+		// Color, graphics, no linear buffer
+		modeAttributes = 0x1b;
 		break;
 
 	case M_LIN8: {
-		modePageSize           = mblock.sheight * mblock.swidth;
 		minfo.BytesPerScanLine = host_to_le16(mblock.swidth);
 		minfo.NumberOfPlanes   = 0x1;
 		minfo.BitsPerPixel     = 8u;
@@ -260,7 +305,6 @@ uint8_t VESA_GetSVGAModeInformation(uint16_t mode, uint16_t seg, uint16_t off)
 	} break;
 
 	case M_LIN15:
-		modePageSize           = mblock.sheight * mblock.swidth * 2;
 		minfo.BytesPerScanLine = host_to_le16(mblock.swidth * 2);
 		minfo.NumberOfPlanes   = 0x1;
 		minfo.BitsPerPixel     = 15u;
@@ -273,15 +317,16 @@ uint8_t VESA_GetSVGAModeInformation(uint16_t mode, uint16_t seg, uint16_t off)
 		minfo.BlueMaskPos      = 0u;
 		minfo.ReservedMaskSize = 0x01;
 		minfo.ReservedMaskPos  = 0x0f;
-		modeAttributes         = 0x1b; // Color, graphics
 
+		// Color, graphics
+		modeAttributes = 0x1b;
 		if (!int10.vesa_nolfb) {
-			modeAttributes |= 0x80; // linear framebuffer
+			// Enable linear framebuffer
+			modeAttributes |= 0x80;
 		}
 		break;
 
 	case M_LIN16:
-		modePageSize           = mblock.sheight * mblock.swidth * 2;
 		minfo.BytesPerScanLine = host_to_le16(mblock.swidth * 2);
 		minfo.NumberOfPlanes   = 0x1;
 		minfo.BitsPerPixel     = 16u;
@@ -292,10 +337,12 @@ uint8_t VESA_GetSVGAModeInformation(uint16_t mode, uint16_t seg, uint16_t off)
 		minfo.GreenMaskPos     = 5u;
 		minfo.BlueMaskSize     = 5u;
 		minfo.BlueMaskPos      = 0u;
-		modeAttributes         = 0x1b; // Color, graphics
 
+		// Color, graphics
+		modeAttributes = 0x1b;
 		if (!int10.vesa_nolfb) {
-			modeAttributes |= 0x80; // linear framebuffer
+			// Enable linear framebuffer
+			modeAttributes |= 0x80;
 		}
 		break;
 
@@ -303,10 +350,8 @@ uint8_t VESA_GetSVGAModeInformation(uint16_t mode, uint16_t seg, uint16_t off)
 		// Mode 0x212 has 128 extra bytes per scan line for
 		// compatibility with Windows 640x480 24-bit S3 Trio drivers
 		if (mode == 0x212) {
-			modePageSize = mblock.sheight * (mblock.swidth * 3 + 128);
 			minfo.BytesPerScanLine = host_to_le16(mblock.swidth * 3 + 128);
 		} else {
-			modePageSize = mblock.sheight * (mblock.swidth * 3);
 			minfo.BytesPerScanLine = host_to_le16(mblock.swidth * 3);
 		}
 		minfo.NumberOfPlanes = 0x1u;
@@ -318,15 +363,16 @@ uint8_t VESA_GetSVGAModeInformation(uint16_t mode, uint16_t seg, uint16_t off)
 		minfo.GreenMaskPos   = 0x8;
 		minfo.BlueMaskSize   = 0x8;
 		minfo.BlueMaskPos    = 0x0;
-		modeAttributes       = 0x1b; // Color, graphics
 
+		// Color, graphics
+		modeAttributes = 0x1b;
 		if (!int10.vesa_nolfb) {
-			modeAttributes |= 0x80; // linear framebuffer
+			// Enable linear framebuffer
+			modeAttributes |= 0x80;
 		}
 		break;
 
 	case M_LIN32:
-		modePageSize           = mblock.sheight * mblock.swidth * 4;
 		minfo.BytesPerScanLine = host_to_le16(mblock.swidth * 4);
 		minfo.NumberOfPlanes   = 0x1u;
 		minfo.BitsPerPixel     = 32u;
@@ -339,30 +385,26 @@ uint8_t VESA_GetSVGAModeInformation(uint16_t mode, uint16_t seg, uint16_t off)
 		minfo.BlueMaskPos      = 0x0;
 		minfo.ReservedMaskSize = 0x8;
 		minfo.ReservedMaskPos  = 0x18;
-		modeAttributes         = 0x1b; // Color, graphics
 
+		// Color, graphics
+		modeAttributes = 0x1b;
 		if (!int10.vesa_nolfb) {
-			modeAttributes |= 0x80; // linear framebuffer
+			// Enable linear framebuffer
+			modeAttributes |= 0x80;
 		}
 		break;
 
 	case M_TEXT:
-		modePageSize           = 0;
 		minfo.BytesPerScanLine = host_to_le16(mblock.twidth * 2);
 		minfo.NumberOfPlanes   = 0x4;
 		minfo.BitsPerPixel     = 4u;
 		minfo.MemoryModel      = 0u;   // text
-		modeAttributes         = 0x0f; // Color, text, bios output
+
+		// Color, text, bios output
+		modeAttributes = 0x0f;
 		break;
 
 	default: return VESA_FAIL;
-	}
-
-	if (modePageSize & 0xFFFF) {
-		// It is documented that many applications assume 64k-aligned
-		// page sizes VBETEST is one of them
-		modePageSize += 0x10000;
-		modePageSize &= ~0xFFFF;
 	}
 
 	int modePages = 0;
@@ -399,7 +441,7 @@ uint8_t VESA_GetSVGAModeInformation(uint16_t mode, uint16_t seg, uint16_t off)
 	minfo.XCharSize     = mblock.cwidth;
 	minfo.YCharSize     = mblock.cheight;
 
-	if (!int10.vesa_nolfb) {
+	if (modeAttributes & 0x80) {
 		minfo.PhysBasePtr = host_to_le32(PciGfxLfbBase);
 	}
 
@@ -734,6 +776,9 @@ uint8_t VESA_GetDisplayStart(uint16_t& x, uint16_t& y)
 	IO_Write(0x3c0, 0x13 | 0x20);
 
 	uint8_t panning = IO_Read(0x3c1);
+	if (CurMode->type == M_TEXT && panning > 7) {
+		panning = 0;
+	}
 
 	Bitu virtual_screen_width = vga.config.scan_len * pixels_per_offset;
 	Bitu start_pixel = vga.config.display_start * (pixels_per_offset / 2) +

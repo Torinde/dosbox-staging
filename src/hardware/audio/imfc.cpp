@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText:  2023-2025 The DOSBox Staging Team
+// SPDX-FileCopyrightText:  2023-2026 The DOSBox Staging Team
 // SPDX-FileCopyrightText:  2017-2020  Loris Chiocca
 // SPDX-FileCopyrightText:  1999-2000  Daisuke Nagano <breeze.nagano@nifty.ne.jp>
 // SPDX-FileCopyrightText:  1997-1999  Jarek Burczynski <s0246@priv4.onet.pl>
@@ -63,7 +63,8 @@
 #include "shell/shell.h"
 #include "utils/math_utils.h"
 
-#include "SDL_thread.h"
+#include <SDL3/SDL_thread.h>
+#include <SDL3/SDL_mutex.h>
 
 // Enable to activate IMF_LOG calls
 #define IMFC_VERBOSE_LOGGING 0
@@ -75,7 +76,7 @@ constexpr uint8_t MinIrqAddress = 2;
 constexpr uint8_t MaxIrqAddress = 7;
 
 #if IMFC_VERBOSE_LOGGING
-SDL_mutex* m_loggerMutex = nullptr;
+SDL_Mutex* m_loggerMutex = nullptr;
 template <typename... Args>
 void IMF_LOG(std::string format, const Args&... args)
 {
@@ -266,7 +267,7 @@ template <typename BufferDataType>
 struct CyclicBufferState {
 private:
 	const std::string m_name           = {};
-	SDL_mutex* m_mutex                 = nullptr;
+	SDL_Mutex* m_mutex                 = nullptr;
 	bool m_locked                      = false;
 	unsigned int lastReadByteIndex     = 0;
 	unsigned int indexForNextWriteByte = 0;
@@ -555,10 +556,6 @@ static constexpr FractionalNote to_fractional_note(const uint16_t value) noexcep
 constexpr bool operator==(const FractionalNote& a, const FractionalNote& b) noexcept
 {
 	return a.note == b.note && a.fraction == b.fraction;
-}
-constexpr bool operator!=(const FractionalNote& a, const FractionalNote& b) noexcept
-{
-	return !(a == b);
 }
 constexpr FractionalNote operator-(const FractionalNote& a,
                                    const FractionalNote& b) noexcept
@@ -2566,7 +2563,7 @@ private:
 	}
 
 public:
-	virtual ~PD71055() = default;
+	~PD71055() override = default;
 	explicit PD71055(const std::string& name)
 	        : m_name(name),
 	          m_port0(name + ".p0"),
@@ -3078,11 +3075,11 @@ constexpr int8_t LFO_SH = 10;
 [[maybe_unused]] constexpr int8_t TIMER_SH = 16;
 
 constexpr int8_t ENV_BITS = 10;
-constexpr auto ENV_LEN    = (1 << ENV_BITS);
-constexpr auto ENV_STEP   = (128.0 / ENV_LEN);
+constexpr auto ENV_LEN    = 1 << ENV_BITS;
+constexpr auto ENV_STEP   = 128.0 / ENV_LEN;
 
-constexpr auto MAX_ATT_INDEX = (ENV_LEN - 1); /* 1023 */
-constexpr auto MIN_ATT_INDEX = (0);           /* 0 */
+constexpr auto MAX_ATT_INDEX = ENV_LEN - 1; /* 1023 */
+constexpr auto MIN_ATT_INDEX = 0;
 
 constexpr auto EG_ATT = 4;
 constexpr auto EG_DEC = 3;
@@ -3152,8 +3149,9 @@ private:
 
 	// Playback related
 	MixerChannelPtr audio_channel = nullptr;
-	std::queue<AudioFrame> fifo   = {};
-	double last_rendered_ms       = 0.0;
+	std::queue<AudioFrame> fifo        = {};
+	std::vector<AudioFrame> render_buf = {};
+	double last_rendered_ms            = 0.0;
 	double ms_per_render          = 0.0;
 
 	int tl_tab[TL_TAB_LEN]{};
@@ -3609,7 +3607,7 @@ void ym2151_device::init_tables()
 		// we never reach (1<<16) here due to the (x+1) result fits
 		// within 16 bits at maximum
 
-		int n = (int)m;     // 16 bits here
+		auto n = (int)m;    // 16 bits here
 		n >>= 4;            // 12 bits here
 		if ((n & 1) != 0) { // round to closest
 			n = (n >> 1) + 1;
@@ -3640,7 +3638,7 @@ void ym2151_device::init_tables()
 
 		o = o / (ENV_STEP / 4);
 
-		int n = (int)(2.0 * o);
+		auto n = (int)(2.0 * o);
 		if ((n & 1) != 0) { // round to closest
 			n = (n >> 1) + 1;
 		} else {
@@ -5005,20 +5003,23 @@ void ym2151_device::sound_stream_update(const int requested_frames)
 	// if (fifo.size())
 	//	LOG_MSG("IMFC: Queued %2lu cycle-accurate frames", fifo.size());
 
+	render_buf.clear();
+
 	auto frames_remaining = requested_frames;
 
-	// First, send any frames we've queued since the last callback
+	// Drain any cycle-accurate frames queued by RenderUpToNow
 	while (frames_remaining && fifo.size()) {
-		audio_channel->AddSamples_sfloat(1, &fifo.front()[0]);
+		render_buf.push_back(fifo.front());
 		fifo.pop();
 		--frames_remaining;
 	}
-	// If the queue's run dry, render the remainder and sync-up our time datum
+	// Render the remainder
 	while (frames_remaining) {
-		const auto frame = RenderFrame();
-		audio_channel->AddSamples_sfloat(1, &frame[0]);
+		render_buf.emplace_back(RenderFrame());
 		--frames_remaining;
 	}
+
+	audio_channel->AddAudioFrames(render_buf);
 	last_rendered_ms = PIC_AtomicIndex();
 }
 
@@ -5226,7 +5227,7 @@ private:
 	DataContainer<bool> m_piuGroup1DataAvailable;
 	DataContainer<bool> m_piuGroup1DataAcknowledgement;
 
-	SDL_mutex* m_hardwareMutex = {};
+	SDL_Mutex* m_hardwareMutex = {};
 	Intel8253 m_timer;
 	InverterGate m_invTimerAClear;
 	DFlipFlop m_df1;
@@ -5244,8 +5245,8 @@ private:
 	SDL_Thread* m_mainThread                  = nullptr;
 	SDL_Thread* m_interruptThread             = nullptr;
 	bool m_interruptHandlerRunning            = {};
-	SDL_mutex* m_interruptHandlerRunningMutex = nullptr;
-	SDL_cond* m_interruptHandlerRunningCond    = nullptr;
+	SDL_Mutex* m_interruptHandlerRunningMutex = nullptr;
+	SDL_Condition* m_interruptHandlerRunningCond    = nullptr;
 
 	static constexpr auto NumIoHandlers                           = 16;
 	std::array<IO_ReadHandleObject, NumIoHandlers> readHandlers   = {};
@@ -5334,12 +5335,12 @@ private:
 
 	bool currentThreadIsMainThread() const
 	{
-		return SDL_ThreadID() == SDL_GetThreadID(m_mainThread);
+		return SDL_GetCurrentThreadID() == SDL_GetThreadID(m_mainThread);
 	}
 
 	bool currentThreadIsInterruptThread() const
 	{
-		return SDL_ThreadID() == SDL_GetThreadID(m_interruptThread);
+		return SDL_GetCurrentThreadID() == SDL_GetThreadID(m_interruptThread);
 	}
 
 	const char* getCurrentThreadName()
@@ -11284,7 +11285,7 @@ private:
 		log_debug("processSysExCmd_NodeMessage_SetVoiceBankData() - calling receiveDataPacketTypeA(0x%02x)",
 		          readResult.data);
 		if (receiveDataPacketTypeA(readResult.data,
-		                           (uint8_t*)bank,
+		                           (uint8_t*)bank, //-V2018
 		                           sizeof(VoiceDefinitionBank)) !=
 		    ReadStatus::Success) {
 			log_debug("processSysExCmd_NodeMessage_SetVoiceBankData() - receiveDataPacketTypeA returned ERROR");
@@ -12830,13 +12831,13 @@ private:
 					m_sp_SysExStateMatchTable[i] = b;
 					i++;
 
-					// Although incrementing 'i' can technically exceed the for
-					// loop's bounds, we know the prior "b == 0xFF" condition
-					// per the read-only table value means that 'i' will never
-					// be close to the loop end; so simply assert it:
-					//
-					assert(i < sizeof(SP_SysExStateMatchTableTemplate));
-
+					// Incrementing 'i' can technically exceed the
+					// loop's bounds, but the read-only table values
+					// mean 'i' will never be close to the loop end;
+					// guard defensively regardless:
+					if (i >= sizeof(SP_SysExStateMatchTableTemplate)) {
+						break;
+					}
 					b = SP_SysExStateMatchTableTemplate[i];
 				}
 			} else {
@@ -12894,14 +12895,14 @@ public:
 		                  SDL_LockMutex(m_interruptHandlerRunningMutex);
 		                  // log("m_interruptHandlerRunning = true");
 		                  m_interruptHandlerRunning = true;
-		                  SDL_CondSignal(m_interruptHandlerRunningCond);
+		                  SDL_SignalCondition(m_interruptHandlerRunningCond);
 		                  SDL_UnlockMutex(m_interruptHandlerRunningMutex);
 	                  } /*callbackOnLowToHigh*/,
 	                  [this]() {
 		                  SDL_LockMutex(m_interruptHandlerRunningMutex);
 		                  // log("m_interruptHandlerRunning = false");
 		                  m_interruptHandlerRunning = false;
-		                  SDL_CondSignal(m_interruptHandlerRunningCond);
+		                  SDL_SignalCondition(m_interruptHandlerRunningCond);
 		                  SDL_UnlockMutex(m_interruptHandlerRunningMutex);
 	                  } /*callbackOnToHighToLow*/),
 	          m_tsr("TSR"),
@@ -13016,7 +13017,7 @@ public:
 		m_hardwareMutex                = SDL_CreateMutex();
 		m_interruptHandlerRunning      = false;
 		m_interruptHandlerRunningMutex = SDL_CreateMutex();
-		m_interruptHandlerRunningCond  = SDL_CreateCond();
+		m_interruptHandlerRunningCond  = SDL_CreateCondition();
 		m_mainThread = SDL_CreateThread(&imfMainThreadStart, "imfc-main", this);
 		m_interruptThread = SDL_CreateThread(&imfInterruptThreadStart,
 		                                     "imfc-interrupt",
@@ -13059,7 +13060,7 @@ public:
 		while (keepRunning.load()) {
 			SDL_LockMutex(m_interruptHandlerRunningMutex);
 			while (!m_interruptHandlerRunning) {
-				SDL_CondWait(m_interruptHandlerRunningCond,
+				SDL_WaitCondition(m_interruptHandlerRunningCond,
 				             m_interruptHandlerRunningMutex);
 			}
 			SDL_UnlockMutex(m_interruptHandlerRunningMutex);
@@ -13258,73 +13259,67 @@ void MusicFeatureCard::RegisterIoHandlers(const io_port_t port)
 	assert(writeHandlers.size() == NumIoHandlers);
 
 	auto read_piu0 = std::bind(&MusicFeatureCard::readPortPIU0, this, _1, _2);
-	readHandlers.at(0).Install(port_piu0, read_piu0, io_width_t::byte);
+	readHandlers[0].Install(port_piu0, read_piu0, io_width_t::byte);
 
 	auto write_piu0 = std::bind(&MusicFeatureCard::writePortPIU0, this, _1, _2, _3);
-	writeHandlers.at(0).Install(port_piu0, write_piu0, io_width_t::byte);
+	writeHandlers[0].Install(port_piu0, write_piu0, io_width_t::byte);
 
 	auto read_piu1 = std::bind(&MusicFeatureCard::readPortPIU1, this, _1, _2);
-	readHandlers.at(1).Install(port_piu1, read_piu1, io_width_t::byte);
+	readHandlers[1].Install(port_piu1, read_piu1, io_width_t::byte);
 
 	auto write_piu1 = std::bind(&MusicFeatureCard::writePortPIU1, this, _1, _2, _3);
-	writeHandlers.at(1).Install(port_piu1, write_piu1, io_width_t::byte);
+	writeHandlers[1].Install(port_piu1, write_piu1, io_width_t::byte);
 
 	auto read_piu2 = std::bind(&MusicFeatureCard::readPortPIU2, this, _1, _2);
-	readHandlers.at(2).Install(port_piu2, read_piu2, io_width_t::byte);
+	readHandlers[2].Install(port_piu2, read_piu2, io_width_t::byte);
 
 	auto write_piu2 = std::bind(&MusicFeatureCard::writePortPIU2, this, _1, _2, _3);
-	writeHandlers.at(2).Install(port_piu2, write_piu2, io_width_t::byte);
+	writeHandlers[2].Install(port_piu2, write_piu2, io_width_t::byte);
 
 	auto read_pcr = std::bind(&MusicFeatureCard::readPortPCR, this, _1, _2);
-	readHandlers.at(3).Install(port_pcr, read_pcr, io_width_t::byte);
+	readHandlers[3].Install(port_pcr, read_pcr, io_width_t::byte);
 
 	auto write_pcr = std::bind(&MusicFeatureCard::writePortPCR, this, _1, _2, _3);
-	writeHandlers.at(3).Install(port_pcr, write_pcr, io_width_t::byte);
+	writeHandlers[3].Install(port_pcr, write_pcr, io_width_t::byte);
 
 	auto read_cntr0 = std::bind(&MusicFeatureCard::readPortCNTR0, this, _1, _2);
-	readHandlers.at(4).Install(port_cntr0, read_cntr0, io_width_t::byte);
+	readHandlers[4].Install(port_cntr0, read_cntr0, io_width_t::byte);
 
 	auto write_cntr0 = std::bind(&MusicFeatureCard::writePortCNTR0, this, _1, _2, _3);
-	writeHandlers.at(4).Install(port_cntr0, write_cntr0, io_width_t::byte);
+	writeHandlers[4].Install(port_cntr0, write_cntr0, io_width_t::byte);
 
 	auto read_cntr1 = std::bind(&MusicFeatureCard::readPortCNTR1, this, _1, _2);
-	readHandlers.at(5).Install(port_cntr1, read_cntr1, io_width_t::byte);
+	readHandlers[5].Install(port_cntr1, read_cntr1, io_width_t::byte);
 
 	auto write_cntr1 = std::bind(&MusicFeatureCard::writePortCNTR1, this, _1, _2, _3);
-	writeHandlers.at(5).Install(port_cntr1, write_cntr1, io_width_t::byte);
+	writeHandlers[5].Install(port_cntr1, write_cntr1, io_width_t::byte);
 
 	auto read_cntr2 = std::bind(&MusicFeatureCard::readPortCNTR2, this, _1, _2);
-	readHandlers.at(6).Install(port_cntr2, read_cntr2, io_width_t::byte);
+	readHandlers[6].Install(port_cntr2, read_cntr2, io_width_t::byte);
 
 	auto write_cntr2 = std::bind(&MusicFeatureCard::writePortCNTR2, this, _1, _2, _3);
-	writeHandlers.at(6).Install(port_cntr2, write_cntr2, io_width_t::byte);
+	writeHandlers[6].Install(port_cntr2, write_cntr2, io_width_t::byte);
 
 	auto read_tcwr = std::bind(&MusicFeatureCard::readPortTCWR, this, _1, _2);
-	readHandlers.at(7).Install(port_tcwr, read_tcwr, io_width_t::byte);
+	readHandlers[7].Install(port_tcwr, read_tcwr, io_width_t::byte);
 
 	auto write_tcwr = std::bind(&MusicFeatureCard::writePortTCWR, this, _1, _2, _3);
-	writeHandlers.at(7).Install(port_tcwr, write_tcwr, io_width_t::byte);
+	writeHandlers[7].Install(port_tcwr, write_tcwr, io_width_t::byte);
 
 	// ports [+C],[+D],[+E],[+F] all map to the TSR
 	auto read_tcr = std::bind(&MusicFeatureCard::readPortTCR, this, _1, _2);
 	auto write_tcr = std::bind(&MusicFeatureCard::writePortTCR, this, _1, _2, _3);
 	for (io_port_t i = 0; i < 4; i++) {
-		readHandlers.at(8 + i).Install(port_tcr + i, read_tcr, io_width_t::byte);
-		writeHandlers.at(8 + i).Install(port_tcr + i,
-		                                write_tcr,
-		                                io_width_t::byte);
+		readHandlers[8 + i].Install(port_tcr + i, read_tcr, io_width_t::byte);
+		writeHandlers[8 + i].Install(port_tcr + i, write_tcr, io_width_t::byte);
 	}
 
 	// ports [+8],[+9],[+A],[+B] all map to the TCR
 	auto read_tsr = std::bind(&MusicFeatureCard::readPortTSR, this, _1, _2);
 	auto write_tsr = std::bind(&MusicFeatureCard::writePortTSR, this, _1, _2, _3);
 	for (io_port_t i = 0; i < 4; i++) {
-		readHandlers.at(12 + i).Install(port_tsr + i,
-		                                read_tsr,
-		                                io_width_t::byte);
-		writeHandlers.at(12 + i).Install(port_tsr + i,
-		                                 write_tsr,
-		                                 io_width_t::byte);
+		readHandlers[12 + i].Install(port_tsr + i, read_tsr, io_width_t::byte);
+		writeHandlers[12 + i].Install(port_tsr + i, write_tsr, io_width_t::byte);
 	}
 }
 
@@ -13344,24 +13339,10 @@ static void IMFC_Mixer_Callback(const int requested_frames)
 	imfc->mixerCallback(requested_frames);
 }
 
-void imfc_destroy(Section* /*sec*/)
+void IMFC_Init()
 {
-	MIXER_LockMixerThread();
-	imfc = {};
-
-#if IMFC_VERBOSE_LOGGING
-	assert(m_loggerMutex);
-	SDL_DestroyMutex(m_loggerMutex);
-	m_loggerMutex = nullptr;
-#endif
-	MIXER_UnlockMixerThread();
-}
-
-static void imfc_init(Section* sec)
-{
-	assert(sec);
-	const SectionProp* conf = dynamic_cast<SectionProp*>(sec);
-	if (!conf || !conf->GetBool("imfc")) {
+	const auto section = get_section("imfc");
+	if (!section->GetBool("imfc")) {
 		return;
 	}
 
@@ -13403,7 +13384,7 @@ static void imfc_init(Section* sec)
 		channel->SetLowPassFilter(FilterState::On);
 	};
 
-	const std::string filter_choice = conf->GetString("imfc_filter");
+	const std::string filter_choice = section->GetString("imfc_filter");
 
 	if (const auto maybe_bool = parse_bool_setting(filter_choice)) {
 		if (*maybe_bool) {
@@ -13423,21 +13404,42 @@ static void imfc_init(Section* sec)
 		enable_filter();
 	}
 
-	const auto port = static_cast<io_port_t>(conf->GetHex("imfc_base"));
+	const auto port = static_cast<io_port_t>(section->GetHex("imfc_base"));
 
-	const auto irq = clamp(static_cast<uint8_t>(conf->GetInt("imfc_irq")),
+	const auto irq = clamp(static_cast<uint8_t>(section->GetInt("imfc_irq")),
 	                       MinIrqAddress,
 	                       MaxIrqAddress);
 
 	imfc = std::make_unique<MusicFeatureCard>(std::move(channel), port, irq);
 
-	constexpr auto changeable_at_runtime = true;
-	sec->AddDestroyFunction(&imfc_destroy, changeable_at_runtime);
-
 	MIXER_UnlockMixerThread();
 }
 
-void init_imfc_dosbox_settings(SectionProp& secprop)
+void IMFC_Destroy()
+{
+	if (!imfc) {
+		return;
+	}
+
+	MIXER_LockMixerThread();
+	imfc = {};
+
+#if IMFC_VERBOSE_LOGGING
+	assert(m_loggerMutex);
+	SDL_DestroyMutex(m_loggerMutex);
+	m_loggerMutex = nullptr;
+#endif
+	MIXER_UnlockMixerThread();
+}
+
+static void notify_imfc_setting_updated([[maybe_unused]] SectionProp& section,
+                                        [[maybe_unused]] const std::string& prop_name)
+{
+	IMFC_Destroy();
+	IMFC_Init();
+}
+
+static void init_imfc_config_settings(SectionProp& secprop)
 {
 	constexpr auto when_idle = Property::Changeable::WhenIdle;
 
@@ -13449,18 +13451,21 @@ void init_imfc_dosbox_settings(SectionProp& secprop)
 	assert(hex_prop);
 	hex_prop->SetValues({"2A20", "2A30"});
 	hex_prop->SetHelp(
-	        "The IO base address of the IBM Music Feature Card ('2A20' by default).");
+	        "The IO base address of the IBM Music Feature Card ('2A20' by default).\n"
+	        "Possible values: 2A20, 2A30");
 
 	const auto int_prop = secprop.AddInt("imfc_irq", when_idle, 3);
 	assert(int_prop);
 	int_prop->SetValues({"2", "3", "4", "5", "6", "7"});
 	int_prop->SetHelp(
-	        "The IRQ number of the IBM Music Feature Card (3 by default).");
+	        "The IRQ number of the IBM Music Feature Card (3 by default).\n"
+	        "Possible values: 2, 3, 4, 5, 6, 7");
 
 	const auto str_prop = secprop.AddString("imfc_filter", when_idle, "on");
 	assert(str_prop);
 	str_prop->SetHelp(
-	        "Filter for the IBM Music Feature Card output:\n"
+	        "Filter for the IBM Music Feature Card output ('on' by default). Possible values:\n"
+	        "\n"
 	        "  on:        Filter the output (default).\n"
 	        "  off:       Don't filter the output.\n"
 	        "  <custom>:  Custom filter definition; see 'sb_filter' for details.");
@@ -13470,11 +13475,8 @@ void IMFC_AddConfigSection(const ConfigPtr& conf)
 {
 	assert(conf);
 
-	constexpr auto changeable_at_runtime = true;
+	auto section = conf->AddSection("imfc");
+	section->AddUpdateHandler(notify_imfc_setting_updated);
 
-	SectionProp* sec = conf->AddSectionProp("imfc",
-	                                          &imfc_init,
-	                                          changeable_at_runtime);
-	assert(sec);
-	init_imfc_dosbox_settings(*sec);
+	init_imfc_config_settings(*section);
 }

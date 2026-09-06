@@ -5,11 +5,12 @@
 #include "ints/bios.h"
 
 #include "cpu/callback.h"
-#include "hardware/memory.h"
-#include "hardware/input/keyboard.h"
+#include "cpu/cpu.h"
 #include "cpu/registers.h"
+#include "dos/dos.h"
+#include "hardware/input/keyboard.h"
+#include "hardware/memory.h"
 #include "hardware/port.h"
-#include "dos/dos_inc.h"
 
 static callback_number_t call_int16 = 0;
 static callback_number_t call_irq1  = 0;
@@ -351,8 +352,10 @@ static Bitu IRQ1_Handler(void) {
 				// Interrupts screen output by BIOS until another key is pressed
 				// This is seemingly accurate behavior as tested in 86box
 				// https://en.wikipedia.org/wiki/Break_key
-				while (!shutdown_requested && (mem_readb(BIOS_KEYBOARD_FLAGS2) & 8)) {
-					CALLBACK_Idle();
+				while (mem_readb(BIOS_KEYBOARD_FLAGS2) & 8) {
+					if (CALLBACK_Idle()) {
+						break;
+					}
 				}
 				reg_ip+=5;	// skip out 20,20
 				return CBRET_NONE;
@@ -527,7 +530,10 @@ static Bitu INT16_Handler(void) {
 			reg_ax=temp;
 		} else {
 			/* enter small idle loop to allow for irqs to happen */
-			reg_ip+=1;
+			if (CPU_ShouldHltOnIdle()) {
+				CPU_HLT(reg_eip);
+			}
+			reg_ip += 1;
 		}
 		break;
 	case 0x10: /* GET KEYSTROKE (enhanced keyboards only) */
@@ -539,7 +545,10 @@ static Bitu INT16_Handler(void) {
 			reg_ax=temp;
 		} else {
 			/* enter small idle loop to allow for irqs to happen */
-			reg_ip+=1;
+			if (CPU_ShouldHltOnIdle()) {
+				CPU_HLT(reg_eip);
+			}
+			reg_ip += 1;
 		}
 		break;
 	case 0x01: /* CHECK FOR KEYSTROKE */
@@ -612,10 +621,6 @@ static Bitu INT16_Handler(void) {
 
 	return CBRET_NONE;
 }
-
-//Keyboard initialisation. src/gui/sdlmain.cpp
-extern bool startup_state_numlock;
-extern bool startup_state_capslock;
 
 static void InitBiosSegment(void) {
 	/* Setup the variables for keyboard in the bios data segment */

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText:  2021-2025 The DOSBox Staging Team
+// SPDX-FileCopyrightText:  2021-2026 The DOSBox Staging Team
 // SPDX-FileCopyrightText:  2002-2021 The DOSBox Team
 // SPDX-License-Identifier: GPL-2.0-or-later
 
@@ -474,7 +474,7 @@ l_M_Ed:
 	case D_LOCK: /* FIXME: according to intel, LOCK should raise an exception if it's not followed by one of a small set of instructions;
 			probably doesn't matter for our purposes as it is a pentium prefix anyhow */
 		LOG(LOG_CPU,LOG_NORMAL)("CPU:LOCK");
-		goto nextopcode;
+		goto restartopcode;
 	case D_ENTERw:
 		{
 			Bitu bytes=Fetchw();
@@ -521,8 +521,8 @@ l_M_Ed:
 		return CBRET_NONE;
 	case D_CLTS:
 		if (cpu.pmode && cpu.cpl) goto illegalopcode;
-		cpu.cr0&=(~CR0_TASKSWITCH);
-		goto nextopcode;
+	        cpu.cr0 &= (~CR0_TASKSWITCH); //-V784
+	        goto nextopcode;
 	case D_ICEBP:
 		CPU_SW_Interrupt_NoIOPLCheck(1,GetIP());
 		continue;

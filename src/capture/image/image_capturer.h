@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText:  2023-2025 The DOSBox Staging Team
+// SPDX-FileCopyrightText:  2023-2026 The DOSBox Staging Team
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #ifndef DOSBOX_IMAGE_CAPTURER_H
@@ -8,7 +8,7 @@
 #include <string>
 
 #include "capture/capture.h"
-#include "gui/render.h"
+#include "gui/render/render.h"
 #include "image_saver.h"
 #include "misc/std_filesystem.h"
 
@@ -62,21 +62,35 @@ public:
 
 private:
 	struct State {
-		CaptureState raw      = {};
-		CaptureState upscaled = {};
-		CaptureState rendered = {};
-		CaptureState grouped  = {};
+		// If `grouped` is not `Off`, the `raw`, `upscaled` and
+		// `rendered` single-capture states are `Off`.
+		//
+		// Conversely, if `grouped` is not `Off`, the rest of the
+		// single-capture states are `Off.`
+		//
+		CaptureState raw      = CaptureState::Off;
+		CaptureState upscaled = CaptureState::Off;
+		CaptureState rendered = CaptureState::Off;
+
+		CaptureState grouped = CaptureState::Off;
 	};
 	State state = {};
 
 	struct GroupedMode {
-		bool wants_raw      = false;
+		// True if we need to capture the raw output in group capture mode
+		bool wants_raw = false;
+
+		// True if we need to capture the upscaled output in group
+		// capture mode
 		bool wants_upscaled = false;
+
+		// True if we need to capture the rendered output in group
+		// capture mode
 		bool wants_rendered = false;
 	};
 	GroupedMode grouped_mode = {};
 
-	std_fs::path rendered_path    = {};
+	std_fs::path rendered_path = {};
 
 	static constexpr auto NumImageSavers                = 3;
 	size_t current_image_saver_index                    = 0;
@@ -85,6 +99,8 @@ private:
 	void ConfigureGroupedMode(const std::string& prefs);
 
 	ImageSaver& GetNextImageSaver();
+
+	void MaybeDrainOnPause();
 };
 
 #endif // DOSBOX_IMAGE_CAPTURER_H

@@ -1,11 +1,11 @@
-// SPDX-FileCopyrightText:  2023-2025 The DOSBox Staging Team
+// SPDX-FileCopyrightText:  2023-2026 The DOSBox Staging Team
 // SPDX-FileCopyrightText:  2002-2021 The DOSBox Team
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #ifndef DOSBOX_CAPTURE_H
 #define DOSBOX_CAPTURE_H
 
-#include "gui/render.h"
+#include "misc/rendered_image.h"
 
 #include "misc/std_filesystem.h"
 
@@ -27,6 +27,9 @@ enum class CaptureType {
 enum class CaptureState { Off, Pending, InProgress };
 
 void CAPTURE_AddConfigSection(const ConfigPtr& conf);
+
+void CAPTURE_Init();
+void CAPTURE_Destroy();
 
 // TODO move raw OPL and serial log capture into the capture module too
 

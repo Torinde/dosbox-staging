@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText:  2019-2025 The DOSBox Staging Team
+// SPDX-FileCopyrightText:  2019-2026 The DOSBox Staging Team
 // SPDX-FileCopyrightText:  2002-2021 The DOSBox Team
 // SPDX-License-Identifier: GPL-2.0-or-later
 
@@ -8,17 +8,17 @@
 #include <memory>
 #include <string_view>
 
-#include "ints/bios_disk.h"
-#include "cpu/callback.h"
-#include "dos_code_page.h"
-#include "dos_inc.h"
-#include "dos_locale.h"
-#include "dos/drives.h"
-#include "ints/int10.h"
-#include "gui/mapper.h"
-#include "utils/math_utils.h"
-#include "cpu/registers.h"
 #include "config/setup.h"
+#include "cpu/callback.h"
+#include "cpu/registers.h"
+#include "dos.h"
+#include "dos/drives.h"
+#include "dos_code_page.h"
+#include "dos_locale.h"
+#include "gui/mapper.h"
+#include "ints/bios_disk.h"
+#include "ints/int10.h"
+#include "utils/math_utils.h"
 #include "utils/string_utils.h"
 
 static const std::string ResourceDir = "freedos-keyboard";
@@ -228,7 +228,7 @@ static uint32_t read_kcl_file(const FILE_unique_ptr& kcl_file,
 			uint16_t lcnum = host_readw(&rbuf[0]);
 			i+=2;
 			uint16_t lng_pos = 0;
-			for (;i<data_len;) {
+			while (i < data_len) {
 				if (fread(rbuf, sizeof(uint8_t), 1, kcl_file.get()) != 1) {
 					break;
 				}
@@ -340,7 +340,7 @@ KeyboardLayoutResult KeyboardLayout::ReadKeyboardFile(const std::string& keyboar
 		start_pos=0;
 	} else {
 		// check ID-bytes of file
-		uint32_t dr = (uint32_t)fread(read_buf, sizeof(uint8_t), 4,
+		auto dr = (uint32_t)fread(read_buf, sizeof(uint8_t), 4,
 		                          tempfile.get());
 		if ((dr<4) || (read_buf[0]!=0x4b) || (read_buf[1]!=0x4c) || (read_buf[2]!=0x46)) {
 			LOG_WARNING("LOCALE: Keyboard layout file for layout '%s' is invalid",
@@ -362,9 +362,9 @@ KeyboardLayoutResult KeyboardLayout::ReadKeyboardFile(const std::string& keyboar
 	for (uint16_t i = 0; i < data_len;) {
 		i+=2;
 		std::string available_layout = {};
-		for (;i<data_len;) {
+		while (i < data_len) {
 			assert(start_pos + i < sizeof(read_buf));
-			char lcode=char(read_buf[start_pos+i]);
+			auto lcode = char(read_buf[start_pos+i]);
 			i++;
 			if (lcode==',') break;
 			available_layout.push_back(lcode);
@@ -607,7 +607,7 @@ bool KeyboardLayout::SetMapKey(const uint8_t key, const uint16_t layouted_key,
                                const bool is_command, const bool is_keypair)
 {
 	if (is_command) {
-		uint8_t key_command=(uint8_t)(layouted_key&0xff);
+		auto key_command=(uint8_t)(layouted_key&0xff);
 		// check if diacritics-command
 		if ((key_command>=200) && (key_command<235)) {
 			// diacritics command
@@ -631,8 +631,10 @@ bool KeyboardLayout::SetMapKey(const uint8_t key, const uint16_t layouted_key,
 	} else {
 		// non-command
 		if (diacritics_character>0) {
-			if (diacritics_character-200>=diacritics_entries) diacritics_character = 0;
-			else {
+			if (diacritics_character < 200 ||
+			    diacritics_character - 200 >= diacritics_entries) {
+				diacritics_character = 0;
+			} else {
 				uint16_t diacritics_start=0;
 				// search start of subtable
 				for (uint16_t i=0; i<diacritics_character-200; i++)
@@ -696,7 +698,7 @@ uint16_t KeyboardLayout::ExtractCodePage(const std::string& keyboard_layout)
 		start_pos=0;
 	} else {
 		// check ID-bytes of file
-		uint32_t dr = (uint32_t)fread(read_buf, sizeof(uint8_t), 4,
+		auto dr = (uint32_t)fread(read_buf, sizeof(uint8_t), 4,
 		                          tempfile.get());
 		if ((dr<4) || (read_buf[0]!=0x4b) || (read_buf[1]!=0x4c) || (read_buf[2]!=0x46)) {
 			LOG_WARNING("LOCALE: Keyboard layout file for layout '%s' is invalid",
@@ -765,7 +767,7 @@ KeyboardLayoutResult KeyboardLayout::SwitchKeyboardLayout(
 				diacritics_character = 0;
 			}
 		} else {
-			KeyboardLayout *temp_layout = new KeyboardLayout();
+			auto temp_layout = new KeyboardLayout();
 
 			auto code_page = temp_layout->ExtractCodePage(keyboard_layout);
 			if (!DOS_CanLoadScreenFonts() && code_page != DefaultCodePage) {
@@ -832,33 +834,20 @@ KeyboardLayoutResult DOS_LoadKeyboardLayout(const std::string& keyboard_layout,
 
 	auto new_layout = std::make_unique<KeyboardLayout>();
 
-	std::vector<uint16_t> code_pages = {};
-
 	if (!DOS_CanLoadScreenFonts()) {
 		// Can't set custom code page on pre-EGA display adapters
 		if (code_page_autodetect) {
-			code_pages.push_back(DefaultCodePage);
+			code_page = DefaultCodePage;
 		} else if (code_page != DefaultCodePage || !cpi_file.empty()) {
 			return KeyboardLayoutResult::IncompatibleMachine;
 		}
 	} else if (code_page_autodetect) {
 		// Get the preferred code page
-		const auto bundled = DOS_GetBundledCodePage(keyboard_layout);
-		code_pages = DOS_SuggestBetterCodePages(bundled, keyboard_layout);
-		code_pages.push_back(bundled);
-	} else {
-		code_pages.push_back(code_page);
+		code_page = DOS_GetBundledCodePage(keyboard_layout);
 	}
 
 	// Try to read the keyboard layout
-	KeyboardLayoutResult result = KeyboardLayoutResult::LayoutNotKnown;
-	for (const auto try_code_page : code_pages) {
-		code_page = try_code_page;
-		result = new_layout->ReadKeyboardFile(keyboard_layout, code_page);
-		if (result == KeyboardLayoutResult::OK) {
-			break;
-		}
-	}
+	auto result = new_layout->ReadKeyboardFile(keyboard_layout, code_page);
 
 	// Allow using 'us' layout with any code page
 	if ((result == KeyboardLayoutResult::LayoutNotKnown ||

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText:  2020-2025 The DOSBox Staging Team
+// SPDX-FileCopyrightText:  2020-2026 The DOSBox Staging Team
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #ifndef DOSBOX_STRING_UTILS_H
@@ -12,7 +12,10 @@
 #include <cstring>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
+
+#include "misc/support.h"
 
 template <size_t N>
 int safe_sprintf(char (&dst)[N], const char* fmt, ...)
@@ -191,6 +194,8 @@ char* rtrim(char* str);
 char* trim(char* str);
 char* upcase(char* str);
 char* lowcase(char* str);
+std::string upcase(const std::string_view sv);
+std::string lowcase(const std::string_view sv);
 
 inline bool is_empty(const char* str) noexcept
 {
@@ -217,6 +222,24 @@ constexpr bool iequals(T1&& a, T2&& b)
 	const str_t2 str_b = std::forward<T2>(b);
 
 	return std::equal(str_a.begin(), str_a.end(), str_b.begin(), str_b.end(), ciequals);
+}
+
+// same as above, but case-sensitive
+template <typename T1, typename T2>
+constexpr bool equals(T1&& a, T2&& b)
+{
+	using str_t1 = std::conditional_t<std::is_same_v<T1, const std::string&>,
+	                                  const std::string&,
+	                                  const std::string_view>;
+
+	using str_t2 = std::conditional_t<std::is_same_v<T2, const std::string&>,
+	                                  const std::string&,
+	                                  const std::string_view>;
+
+	const str_t1 str_a = std::forward<T1>(a);
+	const str_t2 str_b = std::forward<T2>(b);
+
+	return std::equal(str_a.begin(), str_a.end(), str_b.begin(), str_b.end());
 }
 
 // Performs a "natural" comparison between A and B, which is case-insensitive
@@ -268,6 +291,42 @@ std::string join_with_commas(const std::vector<std::string>& items,
                              const std::string_view and_conjunction = "and",
                              const std::string_view end_punctuation = ".");
 
+// Creates a string representation of an STL container of simple arithmetic or
+// enums types (e.g., typically, a vector of numbers). Useful for debugging.
+//
+template <typename Container>
+std::string to_string(const Container& c, const std::string_view delimiter = ", ",
+                      const std::string& prefix = "{",
+                      const std::string& suffix = "}")
+{
+	using ElementType = typename Container::value_type;
+
+	static_assert(std::is_enum_v<ElementType> || std::is_arithmetic_v<ElementType>,
+	              "Container elements must be either enum class types "
+	              "or arithmetic types compatible with std::to_string()");
+
+	std::string result = prefix;
+
+	for (auto it = c.begin(); it != c.end(); ++it) {
+		if constexpr (std::is_enum_v<ElementType>) {
+			result += std::to_string(enum_val(*it));
+		} else {
+			result += std::to_string(*it);
+		}
+		if (std::next(it) != c.end()) {
+			result += delimiter;
+		}
+	}
+
+	return result + suffix;
+}
+
+// Creates a string representation of a list of strings. Useful for debugging.
+//
+std::string join(const std::vector<std::string>& items,
+                 const std::string_view delimiter = ", ",
+                 const std::string& prefix = "{", const std::string& suffix = "}");
+
 // Parse the string as an integer or decimal value and return it as a float.
 // This API should give us enough numerical range and accuracy for any
 // text-based inputs.
@@ -289,6 +348,16 @@ std::optional<float> parse_float(const std::string& s);
 //  - parse_value("txt")  returns empty
 //
 std::optional<int> parse_int(const std::string& s, const int base = 10);
+
+// Parse a 'WIDTHxHEIGHT' string (e.g. "1024x768") into a (width, height)
+// integer pair.
+//
+// For example:
+//  - parse_int_dimensions("1024x768") returns {1024, 768}
+//  - parse_int_dimensions("1024x")    returns empty
+//  - parse_int_dimensions("txt")      returns empty
+//
+std::optional<std::pair<int, int>> parse_int_dimensions(const std::string_view s);
 
 // Returned percentage values are unscaled.
 std::optional<float> parse_percentage_with_percent_sign(const std::string_view s);
@@ -330,7 +399,7 @@ std::string format_str(const std::string& format, const Args&... args) noexcept
 	return result;
 }
 
-template<size_t N>
+template <size_t N>
 std::string safe_tostring(char (&str)[N]) noexcept
 {
 	return std::string(str, safe_strlen(str));
@@ -349,6 +418,8 @@ std::string host_eol();
 
 // Replaces end-of-line markings (any encoding) with the supplied one
 std::string replace_eol(const std::string& str, const std::string& new_eol);
+
+std::string right_pad(const std::string& str, int length, char pad_char);
 
 // Compares two pieces of text, insensitive to end-of-line encoding differences
 bool is_text_equal(const std::string& str_1, const std::string& str_2);

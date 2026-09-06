@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText:  2023-2025 The DOSBox Staging Team
+// SPDX-FileCopyrightText:  2023-2026 The DOSBox Staging Team
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include "image_capturer.h"
@@ -7,6 +7,7 @@
 #include <string>
 
 #include "config/setup.h"
+#include "dosbox.h"
 #include "misc/std_filesystem.h"
 #include "utils/checks.h"
 #include "utils/string_utils.h"
@@ -113,15 +114,15 @@ void ImageCapturer::MaybeCaptureImage(const RenderedImage& image)
 		return;
 	}
 
-	bool do_raw      = false;
-	bool do_upscaled = false;
-	bool do_rendered = false;
+	bool capture_raw      = false;
+	bool capture_upscaled = false;
+	bool capture_rendered = false;
 
 	if (state.grouped == CaptureState::Off) {
 		// We're in regular single image capture mode
-		do_raw      = (state.raw != CaptureState::Off);
-		do_upscaled = (state.upscaled != CaptureState::Off);
-		do_rendered = (state.rendered != CaptureState::Off);
+		capture_raw      = (state.raw != CaptureState::Off);
+		capture_upscaled = (state.upscaled != CaptureState::Off);
+		capture_rendered = (state.rendered != CaptureState::Off);
 
 		// Clear the state flags
 		state.raw      = CaptureState::Off;
@@ -133,44 +134,44 @@ void ImageCapturer::MaybeCaptureImage(const RenderedImage& image)
 		state.grouped = CaptureState::InProgress;
 
 		if (grouped_mode.wants_raw) {
-			do_raw = true;
+			capture_raw = true;
 		}
 		if (grouped_mode.wants_upscaled) {
-			do_upscaled = true;
+			capture_upscaled = true;
 		}
 		if (grouped_mode.wants_rendered) {
-			do_rendered = true;
+			capture_rendered = true;
 			// If rendered capture is wanted, the state will be
-			// cleared in the CapturePostRenderImagecallback...
+			// cleared in the CapturePostRenderImage() callback...
 		} else {
-			// ...otherwise we clear it now
+			// ...otherwise we're clearing it now.
 			state.grouped = CaptureState::Off;
 		}
 	}
 
-	if (!(do_raw || do_upscaled || do_rendered)) {
+	if (!(capture_raw || capture_upscaled || capture_rendered)) {
 		return;
 	}
 
-	// We can pass in any of the image types, it doesn't matter which
+	// We can pass in any of the image types; it doesn't matter which.
 	const auto index = get_next_capture_index(CaptureType::RawImage);
 	if (!index) {
 		return;
 	}
-	if (do_raw) {
+	if (capture_raw) {
 		GetNextImageSaver().QueueImage(
 		        image.deep_copy(),
 		        CapturedImageType::Raw,
 		        generate_capture_filename(CaptureType::RawImage, index));
 	}
-	if (do_upscaled) {
+	if (capture_upscaled) {
 		GetNextImageSaver().QueueImage(
 		        image.deep_copy(),
 		        CapturedImageType::Upscaled,
 		        generate_capture_filename(CaptureType::UpscaledImage, index));
 	}
 
-	if (do_rendered) {
+	if (capture_rendered) {
 		rendered_path = generate_capture_filename(CaptureType::RenderedImage,
 		                                          index);
 	}
@@ -194,12 +195,41 @@ ImageSaver& ImageCapturer::GetNextImageSaver()
 	return image_savers[current_image_saver_index];
 }
 
+// During pause, `RENDER_EndUpdate()` doesn't fire, so the normal vertical
+// retrace-driven `MaybeCaptureImage()` drain never runs and the request stays
+// in `Pending` forever (rendered-only captures would also hit a stale
+// `rendered_path` from a prior non-paused capture).
+//
+// Drive the drain synchronously here using the source latch via
+// `RENDER_GetCurrentImage()`; each press allocates its own index inside
+// `MaybeCaptureImage()` so repeated capture actions produce distinct indexed
+// files. No effect outside pause.
+//
+void ImageCapturer::MaybeDrainOnPause()
+{
+	if (!DOSBOX_IsPaused()) {
+		return;
+	}
+
+	// If no frame has been completed yet (e.g., pause activated during
+	// startup before the first VGA scanout), the latched image is empty and
+	// there's nothing to capture.
+	const auto image = RENDER_GetCurrentImage();
+	if (!image.image_data) {
+		return;
+	}
+
+	MaybeCaptureImage(image);
+}
+
 void ImageCapturer::RequestRawCapture()
 {
 	if (state.raw != CaptureState::Off) {
 		return;
 	}
+
 	state.raw = CaptureState::Pending;
+	MaybeDrainOnPause();
 }
 
 void ImageCapturer::RequestUpscaledCapture()
@@ -207,7 +237,9 @@ void ImageCapturer::RequestUpscaledCapture()
 	if (state.upscaled != CaptureState::Off) {
 		return;
 	}
+
 	state.upscaled = CaptureState::Pending;
+	MaybeDrainOnPause();
 }
 
 void ImageCapturer::RequestRenderedCapture()
@@ -215,7 +247,9 @@ void ImageCapturer::RequestRenderedCapture()
 	if (state.rendered != CaptureState::Off) {
 		return;
 	}
+
 	state.rendered = CaptureState::Pending;
+	MaybeDrainOnPause();
 }
 
 void ImageCapturer::RequestGroupedCapture()
@@ -224,4 +258,5 @@ void ImageCapturer::RequestGroupedCapture()
 		return;
 	}
 	state.grouped = CaptureState::Pending;
+	MaybeDrainOnPause();
 }

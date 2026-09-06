@@ -17,6 +17,7 @@
 #include "hardware/pic.h"
 #include "hardware/port.h"
 #include "utils/mem_host.h"
+#include "utils/string_utils.h"
 
 #ifndef C_VGARAM_CHECKED
 #define C_VGARAM_CHECKED 1
@@ -1118,7 +1119,8 @@ void VGA_StartUpdateLFB(void) {
 	MEM_SetLFB(vga.lfb.page, vga.vmemsize / 4096, vga.lfb.handler, &vgaph.mmio);
 }
 
-static void VGA_Memory_ShutDown(Section * /*sec*/) {
+void VGA_DestroyMemory()
+{
 #ifdef VGA_KEEP_CHANGES
 	delete[] vga.changes.map;
 	vga.mem.linear = {};
@@ -1128,10 +1130,10 @@ static void VGA_Memory_ShutDown(Section * /*sec*/) {
 
 static uint32_t determine_vmem_delay_ns()
 {
-	const auto sect = static_cast<SectionProp*>(control->GetSection("dosbox"));
-	assert(sect);
+	const auto section = get_section("dosbox");
+	assert(section);
 
-	const auto vmem_delay_str = sect->GetString("vmem_delay");
+	const auto vmem_delay_str = section->GetString("vmem_delay");
 
 	constexpr auto MinDelayNs = 0;
 	constexpr auto MaxDelayNs = 20000;
@@ -1172,7 +1174,7 @@ static uint32_t determine_vmem_delay_ns()
 	}
 }
 
-void VGA_SetupMemory(Section* sec)
+void VGA_SetupMemory()
 {
 	vga.svga.bank_read = vga.svga.bank_write = 0;
 	vga.svga.bank_read_full = vga.svga.bank_write_full = 0;
@@ -1219,8 +1221,6 @@ void VGA_SetupMemory(Section* sec)
 	vga.svga.bank_read = vga.svga.bank_write = 0;
 	vga.svga.bank_read_full = vga.svga.bank_write_full = 0;
 	vga.svga.bank_size = 0x10000; /* most common bank size is 64K */
-
-	sec->AddDestroyFunction(&VGA_Memory_ShutDown);
 
 	if (is_machine_pcjr()) {
 		/* PCJr does not have dedicated graphics memory but uses

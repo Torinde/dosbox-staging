@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText:  2002-2021 The DOSBox Team
+// SPDX-FileCopyrightText:  2002-2025 The DOSBox Team
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include "dosbox.h"
@@ -41,7 +41,6 @@
 #include "hardware/pic.h"
 #include "hardware/port.h"
 #include "lazyflags.h"
-#include "misc/tracy.h"
 
 #define CACHE_MAXSIZE	(4096*2)
 #define CACHE_TOTAL		(1024*1024*8)
@@ -52,14 +51,10 @@
 #define DYN_PAGE_HASH	(4096>>DYN_HASH_SHIFT)
 #define DYN_LINKS		(16)
 
-
 //#define DYN_LOG 1 //Turn Logging on.
 
-
-#if C_FPU
-#define CPU_FPU 1                                               //Enable FPU escape instructions
-#endif
-
+// Enable FPU escape instructions
+#define CPU_FPU 1
 
 // the emulated x86 registers
 #define DRC_REG_EAX 0
@@ -140,37 +135,20 @@ static_assert(offsetof(core_dynrec_t, readdata) % sizeof(uint32_t) == 0,
 
 #include "dyn_cache.h"
 
-#define X86			0x01
-#define X86_64		0x02
-#define MIPSEL		0x03
-#define ARMV4LE		0x04
-#define ARMV7LE		0x05
-#define POWERPC		0x06
-#define ARMV8LE		0x07
-#define PPC64LE		0x08
-
-#if C_TARGETCPU == X86_64
+#if C_TARGET_CPU_X86
 #include "core_dynrec/risc_x64.h"
-#elif C_TARGETCPU == X86
-#include "core_dynrec/risc_x86.h"
-#elif C_TARGETCPU == MIPSEL
-#include "core_dynrec/risc_mipsel32.h"
-#elif (C_TARGETCPU == ARMV4LE) || (C_TARGETCPU == ARMV7LE)
-#include "core_dynrec/risc_armv4le.h"
-#elif C_TARGETCPU == POWERPC
-#include "core_dynrec/risc_ppc.h"
-#elif C_TARGETCPU == ARMV8LE
+
+#elif C_TARGET_CPU_ARM
 #include "core_dynrec/risc_armv8le.h"
-#elif C_TARGETCPU == PPC64LE
-#include "core_dynrec/risc_ppc64le.h"
+
+#else
+#error "Unsupported target CPU"
 #endif
 
 #include "simde/x86/mmx.h"
 
-#if !defined(WORDS_BIGENDIAN)
 #define gen_add_LE gen_add
 #define gen_mov_LE_word_to_reg gen_mov_word_to_reg
-#endif
 
 #include "core_dynrec/decoder.h"
 
@@ -220,7 +198,6 @@ CacheBlock *LinkBlocks(BlockReturn ret)
 
 Bits CPU_Core_Dynrec_Run() noexcept
 {
-	ZoneScoped;
 	for (;;) {
 		// Determine the linear address of CS:EIP
 		PhysPt ip_point=SegPhys(cs)+reg_eip;

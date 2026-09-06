@@ -1,22 +1,34 @@
-target_sources(libdosboxcommon PRIVATE
+target_sources(dosboxcommon PRIVATE
+  fluidsynth.cpp
   midi.cpp
-  midi_alsa.cpp
-  midi_coreaudio.cpp
-  midi_coremidi.cpp
-  midi_fluidsynth.cpp
-  midi_lasynth_model.cpp
-  midi_mt32.cpp
-  midi_win32.cpp
-  midi_soundcanvas.cpp)
+  mt32.cpp
+  mt32_lasynth_model.cpp
+  soundcanvas.cpp
+)
 
-target_include_directories(libdosboxcommon PRIVATE ../libs/include)
-target_link_libraries(libdosboxcommon PRIVATE MT32Emu::mt32emu)
+if (DOSBOX_PLATFORM_WINDOWS)
+  # Windows-only MIDI backend
+  target_sources(dosboxcommon PRIVATE win32.cpp)
 
+elseif (DOSBOX_PLATFORM_MACOS)
+  # macOS-only CoreMIDI backend
+  target_sources(dosboxcommon PRIVATE coremidi.cpp)
+  target_link_libraries(dosboxcommon PRIVATE "-framework CoreFoundation")
+  target_link_libraries(dosboxcommon PRIVATE "-framework CoreMIDI")
+
+  # macOS-only CoreAudio MIDI backend
+  target_sources(dosboxcommon PRIVATE coreaudio.cpp)
+endif()
+
+# Linux-only ALSA MIDI backend
 if (C_ALSA)
-  target_link_libraries(libdosboxcommon PRIVATE ALSA::ALSA)
+  target_sources(dosboxcommon PRIVATE alsa.cpp)
+  target_link_libraries(dosboxcommon PRIVATE ALSA::ALSA)
 endif()
 
-if (C_COREMIDI)
-  target_link_libraries(libdosboxcommon PRIVATE "-framework CoreFoundation")
-  target_link_libraries(libdosboxcommon PRIVATE "-framework CoreMIDI")
+if (C_MT32EMU)
+  target_link_libraries(dosboxcommon PRIVATE MT32Emu::mt32emu)
 endif()
+
+target_link_libraries(dosboxcommon PRIVATE FluidSynth::libfluidsynth clap)
+

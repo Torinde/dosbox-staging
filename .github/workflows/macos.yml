@@ -25,29 +25,52 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  generate_release_notes:
+    name:    Generate release notes
+    runs-on: ubuntu-slim
+    if:      github.event_name == 'push' || github.event.pull_request.head.repo.full_name != github.repository
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          submodules: false
+
+      - name: Set common vars
+        uses: ./.github/actions/set-common-vars
+
+      - name: Generate release notes HTML
+        uses: ./.github/actions/generate-release-notes
+        with:
+          output_path: release-notes.html
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          git_hash: ${{ github.sha }}
+
+      - name: Upload release notes artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-notes-html
+          path: release-notes.html
+          retention-days: 1
+
   build_macos_release:
     name:    Release build (${{ matrix.conf.arch }})
     runs-on: ${{ matrix.conf.host }}
     if:      github.event_name == 'push' || github.event.pull_request.head.repo.full_name != github.repository
-    env:
-      MACOSX_DEPLOYMENT_TARGET: ${{ matrix.conf.minimum_deployment }}
 
     strategy:
       matrix:
         conf:
-          - host: macos-15
+          - host: macos-26
             arch: x86_64
-            minimum_deployment: '11.0'
-            max_warnings: 9
+            max_warnings: 0
 
-          - host: macos-15
+          - host: macos-26
             arch: arm64
-            minimum_deployment: '11.0'
-            max_warnings: 9
+            max_warnings: 0
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
         with:
           submodules: false
 
@@ -55,7 +78,7 @@ jobs:
         uses: ./.github/actions/set-common-vars
 
       - name: Set up CMake
-        uses: lukka/get-cmake@f3273e0bcecf2f2c0d3430de21bf02ab2752c47d # v4.1.0
+        uses: lukka/get-cmake@fffaaafeea488556c2c12dad60690008bc1caacb # v4.4.2
 
       - name: Set up vcpkg
         uses: ./.github/actions/setup-vcpkg
@@ -66,16 +89,23 @@ jobs:
       - name: Log environment
         run: arch -arch=${{ matrix.conf.arch }} ./scripts/ci/log-env.sh
 
+      # Retried because the docs build (OPT_DOCUMENTATION=ON) downloads
+      # external assets via the MkDocs Material privacy plugin; a transient
+      # 5xx or DNS hiccup on any source crashes the whole build. Wrapping
+      # the entire step keeps the change minimal; the cmake build is
+      # incremental, so a docs-flake retry skips already-compiled artifacts.
       - name: Build release
-        run: |
-          set -xo pipefail
-          cmake --preset release-macos-${{ matrix.conf.arch }}
-          cmake --build --preset release-macos-${{ matrix.conf.arch }} 2>&1 | tee build.log
+        uses: ./.github/actions/retry
+        with:
+          cmd: |
+            set -xeo pipefail
+            cmake -DOPT_DOCUMENTATION=ON --preset release-macos-${{ matrix.conf.arch }}
+            cmake --build --preset release-macos-${{ matrix.conf.arch }} 2>&1 | tee build.log
 
       - name: Run tests
         run: |
           set -xo pipefail
-          ctest --preset release-macos-${{ matrix.conf.arch }} 2>&1 | tee tests.log
+          ctest -j 4 --preset release-macos-${{ matrix.conf.arch }} 2>&1 | tee tests.log
 
       - name: Dump workspace contents
         run: find $RUNNER_WORKSPACE
@@ -92,27 +122,34 @@ jobs:
               | grep "path @executable_path/lib"
 
       - name: Upload binary
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: dosbox-${{ matrix.conf.arch }}
           path: build/release-macos-${{ matrix.conf.arch }}/Release/dosbox
           overwrite: true
 
       - name: Upload resources
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: Resources
           path: build/release-macos-${{ matrix.conf.arch }}/Resources
           overwrite: true
 
+      - name:  Report repo cache usage
+        if:    always()
+        shell: bash
+        run:   gh cache list --limit 50 --sort size_in_bytes --order desc
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
 
   publish_universal_build:
     name:    Publish universal build
-    needs:   build_macos_release
-    runs-on: macos-15
+    needs:   [build_macos_release, generate_release_notes]
+    runs-on: macos-26
     steps:
       - name: Check out repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
         with:
           submodules: false
 
@@ -122,8 +159,11 @@ jobs:
       - name: Install brew depedencies
         run: HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK=1 brew install --overwrite librsvg
 
-      - name: Download binaries
-        uses: actions/download-artifact@v4
+      - name: Download all temporary artifacts
+        uses: actions/download-artifact@v8
+
+      - name: Dump workspace contents
+        run: find $RUNNER_WORKSPACE
 
       - name: Package
         run: |
@@ -140,7 +180,9 @@ jobs:
           set -x
           ZIP_NAME=dosbox-vcpkg-deps-macos-universal.zip
 
-          wget -nv https://github.com/dosbox-staging/dosbox-staging-ext/releases/download/$VCPKG_EXT_DEPS_VERSION/$ZIP_NAME
+          # Retry on transient GitHub release-asset CDN flakes.
+          wget -nv --tries=5 --waitretry=10 --retry-connrefused \
+            https://github.com/dosbox-staging/dosbox-staging-ext/releases/download/$VCPKG_EXT_DEPS_VERSION/$ZIP_NAME
           unzip $ZIP_NAME -d vcpkg-deps
 
           LIB_DIR="dist/DOSBox Staging.app/Contents/MacOS/lib"
@@ -153,7 +195,9 @@ jobs:
           set -x
           ZIP_NAME=Nuked-SC55-CLAP-macOS-$NUKED_SC55_CLAP_VERSION.zip
 
-          curl -L https://github.com/johnnovak/Nuked-SC55-CLAP/releases/download/$NUKED_SC55_CLAP_VERSION/$ZIP_NAME -o $ZIP_NAME
+          # Retry on transient GitHub release-asset CDN flakes.
+          curl -fL --retry 5 --retry-all-errors --retry-delay 10 \
+            https://github.com/johnnovak/Nuked-SC55-CLAP/releases/download/$NUKED_SC55_CLAP_VERSION/$ZIP_NAME -o $ZIP_NAME
           unzip $ZIP_NAME -d nuked-sc55-clap
 
           PLUGINS_DIR="dist/DOSBox Staging.app/Contents/PlugIns"
@@ -175,9 +219,11 @@ jobs:
 
 
       - name: Upload DMG disk image
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         # GitHub automatically zips the artifacts, and there's no option
         # to skip it or upload a file only.
         with:
           name: dosbox-staging-macOS-universal-${{ env.DOSBOX_VERSION_AND_HASH }}
-          path: dosbox-staging-macOS-universal-${{ env.DOSBOX_VERSION_AND_HASH }}.dmg
+          path: |
+            dosbox-staging-macOS-universal-${{ env.DOSBOX_VERSION_AND_HASH }}.dmg
+            release-notes.html

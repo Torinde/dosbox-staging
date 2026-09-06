@@ -1,17 +1,14 @@
-/*
- * IDE ATA/ATAPI and controller emulation for DOSBox-X
- * (C) 2012 Jonathan Campbell
-
- * [insert open source license here]
- */
-
-/* $Id: ide.cpp,v 1.49 2009-04-10 09:53:04 c2woody Exp $ */
+// SPDX-FileCopyrightText:  2021-2026 The DOSBox Staging Team
+// SPDX-FileCopyrightText:  2012-2021 Jonathan Campbell
+// SPDX-FileCopyrightText:  2002-2021 The DOSBox Team
+// SPDX-License-Identifier: GPL-2.0-or-later
 
 #include "ide.h"
 
 #include <algorithm>
-#include <cmath>
+#include <bit>
 #include <cassert>
+#include <cmath>
 
 #include "audio/mixer.h"
 #include "config/config.h"
@@ -135,7 +132,7 @@ public:
 	IDEDevice(IDEController *c, const IDEDeviceType device_type) : controller(c), type(device_type) {}
 	IDEDevice(const IDEDevice &other) = delete;            // prevent copying
 	IDEDevice &operator=(const IDEDevice &other) = delete; // prevent assignment
-	virtual ~IDEDevice();
+	virtual ~IDEDevice() = default;
 
 	virtual void host_reset_begin();    /* IDE controller -> upon setting bit 2 of alt (0x3F6) */
 	virtual void host_reset_complete(); /* IDE controller -> upon setting bit 2 of alt (0x3F6) */
@@ -156,7 +153,7 @@ public:
 	IDEATADevice(IDEController *c, uint8_t disk_index);
 	IDEATADevice(const IDEATADevice &other) = delete;            // prevent copying
 	IDEATADevice &operator=(const IDEATADevice &other) = delete; // prevent assignment
-	~IDEATADevice() override;
+	~IDEATADevice() override = default;
 
 	void writecommand(uint8_t cmd) override;
 
@@ -215,7 +212,7 @@ public:
 	IDEATAPICDROMDevice(IDEController *c, uint8_t requested_drive_index);
 	IDEATAPICDROMDevice(const IDEATAPICDROMDevice &other) = delete;            // prevent copying
 	IDEATAPICDROMDevice &operator=(const IDEATAPICDROMDevice &other) = delete; // prevent assignment
-	~IDEATAPICDROMDevice() override;
+	~IDEATAPICDROMDevice() override = default;
 
 	void writecommand(uint8_t cmd) override;
 
@@ -357,7 +354,7 @@ static void IDE_ATAPI_SpinDown(uint32_t idx /*which IDE controller*/)
 		if (dev->type == IDE_TYPE_HDD) {
 			// no-op
 		} else if (dev->type == IDE_TYPE_CDROM) {
-			IDEATAPICDROMDevice *atapi = (IDEATAPICDROMDevice *)dev;
+			auto atapi = (IDEATAPICDROMDevice *)dev;
 
 			if (atapi->loading_mode == LOAD_DISC_READIED || atapi->loading_mode == LOAD_READY) {
 				atapi->loading_mode = LOAD_IDLE;
@@ -385,7 +382,7 @@ static void IDE_ATAPI_CDInsertion(uint32_t idx /*which IDE controller*/)
 		if (dev->type == IDE_TYPE_HDD) {
 			// no-op
 		} else if (dev->type == IDE_TYPE_CDROM) {
-			IDEATAPICDROMDevice *atapi = (IDEATAPICDROMDevice *)dev;
+			auto atapi = (IDEATAPICDROMDevice *)dev;
 
 			if (atapi->loading_mode == LOAD_INSERT_CD) {
 				atapi->loading_mode = LOAD_DISC_LOADING;
@@ -414,7 +411,7 @@ static void IDE_ATAPI_SpinUpComplete(uint32_t idx /*which IDE controller*/)
 		if (dev->type == IDE_TYPE_HDD) {
 			// no-op
 		} else if (dev->type == IDE_TYPE_CDROM) {
-			IDEATAPICDROMDevice *atapi = (IDEATAPICDROMDevice *)dev;
+			auto atapi = (IDEATAPICDROMDevice *)dev;
 
 			if (atapi->loading_mode == LOAD_DISC_LOADING) {
 				atapi->loading_mode = LOAD_DISC_READIED;
@@ -1301,9 +1298,6 @@ IDEATAPICDROMDevice::IDEATAPICDROMDevice(IDEController *c, uint8_t requested_dri
 		spindown_timeout = c->spindown_timeout;
 }
 
-IDEATAPICDROMDevice::~IDEATAPICDROMDevice()
-{}
-
 void IDEATAPICDROMDevice::on_mode_select_io_complete()
 {
 	uint32_t AllocationLength = ((uint32_t)atapi_cmd[7] << 8) + atapi_cmd[8];
@@ -1322,7 +1316,7 @@ void IDEATAPICDROMDevice::on_mode_select_io_complete()
 
 	while ((scan + 2) < fence) {
 		uint8_t PAGE = *scan++;
-		uint32_t LEN = (uint32_t)(*scan++);
+		auto LEN = (uint32_t)(*scan++);
 
 		if ((scan + LEN) > fence) {
 			LOG_WARNING("IDE: ATAPI MODE SELECT warning, page_0 length extends %u bytes past buffer",
@@ -1894,6 +1888,14 @@ void IDEATADevice::data_write(uint32_t v, io_width_t width)
 		io_completion();
 }
 
+// Yo dawg MSVC-Clang likes to complain about pragmas
+// So here's a pragma so you stop complaining about pragmas
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wunknown-pragmas"
+
+#pragma pvs(push)
+#pragma pvs(disable: 524)
+
 void IDEATAPICDROMDevice::prepare_read(uint32_t offset, uint32_t size)
 {
 	/* I/O must be WORD ALIGNED */
@@ -1919,6 +1921,7 @@ void IDEATAPICDROMDevice::prepare_write(uint32_t offset, uint32_t size)
 }
 
 void IDEATADevice::prepare_write(uint32_t offset, uint32_t size)
+
 {
 	/* I/O must be WORD ALIGNED */
 	assert((offset & 1) == 0);
@@ -1941,6 +1944,10 @@ void IDEATADevice::prepare_read(uint32_t offset, uint32_t size)
 	assert(sector_i <= sector_total);
 	assert(sector_total <= sizeof(sector));
 }
+
+#pragma pvs(pop)
+
+#pragma clang diagnostic pop
 
 void IDEATAPICDROMDevice::generate_mmc_inquiry()
 {
@@ -2128,9 +2135,6 @@ IDEATADevice::IDEATADevice(IDEController *c, uint8_t disk_index)
           bios_disk_index(disk_index)
 {}
 
-IDEATADevice::~IDEATADevice()
-{}
-
 std::shared_ptr<imageDisk> IDEATADevice::getBIOSdisk()
 {
 	if (bios_disk_index >= (2 + MAX_HDD_IMAGES))
@@ -2277,7 +2281,7 @@ void IDE_ATAPI_MediaChangeNotify(uint8_t requested_drive_index)
 			if (dev == nullptr)
 				continue;
 			if (dev->type == IDE_TYPE_CDROM) {
-				IDEATAPICDROMDevice *atapi = (IDEATAPICDROMDevice *)dev;
+				auto atapi = (IDEATAPICDROMDevice *)dev;
 				if (requested_drive_index == atapi->drive_index) {
 					LOG_MSG("IDE: ATAPI acknowledge media change for drive %c",
 					        requested_drive_index + 'A');
@@ -2336,8 +2340,7 @@ void IDE_CDROM_Detach(const int8_t requested_drive_index)
 		IDEController *c = idecontroller[index];
 		if (c)
 			for (int slave = 0; slave < 2; slave++) {
-				IDEATAPICDROMDevice *dev;
-				dev = dynamic_cast<IDEATAPICDROMDevice *>(c->device[slave]);
+				auto dev = dynamic_cast<IDEATAPICDROMDevice *>(c->device[slave]);
 				if (dev && dev->drive_index == drive_index) {
 					delete dev;
 					c->device[slave] = nullptr;
@@ -2352,8 +2355,7 @@ void IDE_CDROM_Detach_Ret(int8_t &indexret,bool &slaveret,int8_t drive_index) {
         IDEController *c = idecontroller[index];
         if (c)
         for (int slave = 0; slave < 2; slave++) {
-            IDEATAPICDROMDevice *dev;
-            dev = dynamic_cast<IDEATAPICDROMDevice*>(c->device[slave]);
+            auto dev = dynamic_cast<IDEATAPICDROMDevice*>(c->device[slave]);
             if (dev && dev->drive_index == drive_index) {
                 delete dev;
                 c->device[slave] = nullptr;
@@ -2370,8 +2372,7 @@ void IDE_CDROM_DetachAll()
 		IDEController *c = idecontroller[index];
 		if (c)
 			for (int slave = 0; slave < 2; slave++) {
-				IDEATAPICDROMDevice *dev;
-				dev = dynamic_cast<IDEATAPICDROMDevice *>(c->device[slave]);
+				auto dev = dynamic_cast<IDEATAPICDROMDevice *>(c->device[slave]);
 				if (dev) {
 					delete dev;
 					c->device[slave] = nullptr;
@@ -2416,8 +2417,7 @@ void IDE_Hard_Disk_Detach(uint8_t bios_disk_index)
 		IDEController *c = idecontroller[index];
 		if (c)
 			for (int slave = 0; slave < 2; slave++) {
-				IDEATADevice *dev;
-				dev = dynamic_cast<IDEATADevice *>(c->device[slave]);
+				auto dev = dynamic_cast<IDEATADevice *>(c->device[slave]);
 				if (dev && dev->bios_disk_index == bios_disk_index) {
 					delete dev;
 					c->device[slave] = nullptr;
@@ -2432,7 +2432,7 @@ std::string GetIDEPosition(uint8_t bios_disk_index)
 		IDEController *c = GetIDEController(index);
 		if (c)
 			for (int slave = 0; slave < 2; slave++) {
-				IDEATADevice *dev = dynamic_cast<IDEATADevice *>(c->device[slave]);
+				auto dev = dynamic_cast<IDEATADevice *>(c->device[slave]);
 				if (dev && dev->bios_disk_index == bios_disk_index) {
 					return std::to_string(index + 1) + (slave ? 's' : 'm');
 				}
@@ -2529,7 +2529,7 @@ void IDE_EmuINT13DiskReadByBIOS_LBA(uint8_t disk, uint64_t lba)
 			dev->faked_command = false;
 
 			if (dev->type == IDE_TYPE_HDD) {
-				IDEATADevice *ata = (IDEATADevice *)dev;
+				auto ata = (IDEATADevice *)dev;
 				//              static bool int13_fix_wrap_warned = false;
 				bool vm86 = IDE_CPU_Is_Vm86();
 
@@ -2691,7 +2691,7 @@ void IDE_EmuINT13DiskReadByBIOS(uint8_t disk, uint32_t cyl, uint32_t head, unsig
 			dev->faked_command = false;
 
 			if (dev->type == IDE_TYPE_HDD) {
-				IDEATADevice *ata = (IDEATADevice *)dev;
+				auto ata  = (IDEATADevice *)dev;
 				bool vm86 = IDE_CPU_Is_Vm86();
 
 				if ((ata->bios_disk_index - 2) == (disk - 0x80)) {
@@ -2897,7 +2897,7 @@ void IDE_ResetDiskByBIOS(uint8_t disk)
 			/* TBD: Forcibly device-reset the IDE device */
 
 			if (dev->type == IDE_TYPE_HDD) {
-				IDEATADevice *ata = (IDEATADevice *)dev;
+				auto ata = (IDEATADevice *)dev;
 
 				if ((ata->bios_disk_index - 2) == (disk - 0x80)) {
 					LOG_MSG("IDE: %d%c reset by BIOS disk 0x%02x", (uint32_t)(idx + 1),
@@ -2939,7 +2939,7 @@ static void IDE_DelayedCommand(uint32_t idx /*which IDE controller*/)
 		return;
 
 	if (dev->type == IDE_TYPE_HDD) {
-		IDEATADevice *ata = (IDEATADevice *)dev;
+		auto ata = (IDEATADevice *)dev;
 		uint32_t sectorn = 0; /* TBD: expand to uint64_t when adding LBA48 emulation */
 		uint32_t sectcount;
 		std::shared_ptr<imageDisk> disk = nullptr;
@@ -3323,7 +3323,7 @@ static void IDE_DelayedCommand(uint32_t idx /*which IDE controller*/)
 			break;
 		}
 	} else if (dev->type == IDE_TYPE_CDROM) {
-		IDEATAPICDROMDevice *atapi = (IDEATAPICDROMDevice *)dev;
+		auto atapi = (IDEATAPICDROMDevice *)dev;
 
 		if (dev->state == IDE_DEV_ATAPI_BUSY) {
 			switch (dev->command) {
@@ -3419,9 +3419,6 @@ void IDEDevice::host_reset_begin()
 	allow_writing = true;
 	state = IDE_DEV_BUSY;
 }
-
-IDEDevice::~IDEDevice()
-{}
 
 void IDEDevice::abort_silent()
 {
@@ -3579,11 +3576,6 @@ void IDEATAPICDROMDevice::writecommand(uint8_t cmd)
 	}
 }
 
-static inline bool is_power_of_2(io_val_t val)
-{
-	return (val != 0) && ((val & (val - 1)) == 0);
-}
-
 void IDEATADevice::writecommand(uint8_t cmd)
 {
 	if (!command_interruption_ok(cmd))
@@ -3717,7 +3709,7 @@ void IDEATADevice::writecommand(uint8_t cmd)
 	case 0xC6: /* SET MULTIPLE MODE */
 		/* only sector counts 1, 2, 4, 8, 16, 32, 64, and 128 are legal by standard.
 		 * NTS: There's a bug in VirtualBox that makes 0 legal too! */
-		if (count != 0 && count <= multiple_sector_max && is_power_of_2(count)) {
+		if (count != 0 && count <= multiple_sector_max && std::has_single_bit(count)) {
 			multiple_sector_count = count;
 			status = IDE_STATUS_DRIVE_READY | IDE_STATUS_DRIVE_SEEK_COMPLETE;
 		} else {

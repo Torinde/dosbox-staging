@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText:  2021-2026 The DOSBox Staging Team
 // SPDX-FileCopyrightText:  2002-2021 The DOSBox Team
 // SPDX-License-Identifier: GPL-2.0-or-later
 
@@ -198,7 +199,13 @@ void DriveManager::AppendFilesystemImages(const int drive,
 	disks.insert(std::end(disks), std::begin(images), std::end(images));
 }
 
-void DriveManager::InitializeDrive(int drive) {
+const DriveManager::filesystem_images_t& DriveManager::GetFilesystemImages(int drive)
+{
+	return drive_infos.at(drive).disks;
+}
+
+void DriveManager::InitializeDrive(int drive)
+{
 	auto& drive_info = drive_infos.at(drive);
 	if (!drive_info.disks.empty()) {
 		drive_info.current_disk = 0;
@@ -311,7 +318,8 @@ char *DriveManager::GetDrivePosition(int drive)
 	return swap_position;
 }
 
-void DriveManager::Init(Section* /* sec */) {
+void DriveManager::Init()
+{
 	// setup drive_infos structure
 	for(int i = 0; i < DOS_DRIVES; i++) {
 		drive_infos.at(i).current_disk = 0;
@@ -323,6 +331,7 @@ void DriveManager::Init(Section* /* sec */) {
 	//                   "cycledrive", "Cycle Drv");
 }
 
-void DRIVES_Init(Section* sec) {
-	DriveManager::Init(sec);
+void DRIVES_Init()
+{
+	DriveManager::Init();
 }

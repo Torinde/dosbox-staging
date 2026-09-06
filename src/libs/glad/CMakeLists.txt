@@ -1,5 +1,11 @@
-add_library(libglad STATIC
-  src/gl.c
-)
+if (CMAKE_BUILD_TYPE STREQUAL "Debug")
+  add_library(glad STATIC debug/src/gl.c)
+  target_include_directories(glad SYSTEM PUBLIC debug/include)
 
-target_include_directories(libglad PUBLIC include)
+else() # Release
+  add_library(glad STATIC release/src/gl.c)
+  target_include_directories(glad SYSTEM PUBLIC release/include)
+
+endif()
+
+disable_warnings(glad)

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText:  2020-2025 The DOSBox Staging Team
+// SPDX-FileCopyrightText:  2020-2026 The DOSBox Staging Team
 // SPDX-FileCopyrightText:  2002-2021 The DOSBox Team
 // SPDX-License-Identifier: GPL-2.0-or-later
 
@@ -8,16 +8,16 @@
 #include <map>
 #include <vector>
 
-#include "misc/ansi_code_markup.h"
-#include "utils/bitops.h"
-#include "utils/checks.h"
 #include "dos_keyboard_layout.h"
 #include "dos_locale.h"
-#include "misc/logging.h"
 #include "gui/mapper.h"
+#include "misc/ansi_code_markup.h"
 #include "misc/host_locale.h"
-#include "utils/string_utils.h"
+#include "misc/logging.h"
 #include "misc/unicode.h"
+#include "utils/bitops.h"
+#include "utils/checks.h"
+#include "utils/string_utils.h"
 
 CHECK_NARROWING();
 
@@ -45,7 +45,6 @@ static struct {
 static struct Populated {
 	bool is_country_international = false;
 	bool is_country_overriden     = false;
-	bool is_using_euro_currency   = false;
 	bool is_using_fallback_period = false;
 	bool is_using_native_numeric  = false;
 	bool is_using_native_time     = false;
@@ -82,8 +81,6 @@ constexpr size_t InfoOffsetReserved           = 0x18;
 constexpr size_t MaxCurrencySymbolLength = 4;
 constexpr size_t MaxCurrencyPrecision    = 4;
 constexpr size_t ReservedAreaSize        = 10;
-
-const std::string EuroCurrencyCode = "EUR";
 
 static DosCountry get_default_country()
 {
@@ -296,7 +293,6 @@ static bool try_override_date_format(const StdLibLocale& locale)
 static void populate_currency_format(const LocaleInfoEntry& source)
 {
 	const auto& destination = dos.tables.country;
-	populated.is_using_euro_currency = (source.currency_code == EuroCurrencyCode);
 
 	assert(source.currency_code.size() < MaxCurrencySymbolLength);
 	memset(&destination[InfoOffsetCurrencySymbol], 0, MaxCurrencySymbolLength + 1);
@@ -359,7 +355,6 @@ static bool try_override_currency_format(const StdLibLocale& locale)
 
 	// Yes, this is suitable for using - populate
 	const auto& destination = dos.tables.country;
-	populated.is_using_euro_currency = (currency == EuroCurrencyCode);
 
 	memset(&destination[InfoOffsetCurrencySymbol], 0, MaxCurrencySymbolLength + 1);
 
@@ -1028,43 +1023,6 @@ uint16_t DOS_GetBundledCodePage(const std::string& keyboard_layout)
 	return assert_code_page(DefaultCodePage);
 }
 
-std::vector<uint16_t> DOS_SuggestBetterCodePages(const uint16_t code_page,
-                                                 const std::string& keyboard_layout)
-{
-        // We are only suggesting code pages which did not exist in the original
-        // MS-DOS, don't do it if the user requested historic locale settings
-	if (config.locale_period == LocalePeriod::Historic) {
-                return {};
-        }
-
-	std::vector<uint16_t> suggestions = {};
-
-        // According to FreeDOS keyboard layouts package documentation, for the
-        // French and Belgian keyboard layouts there is now a better code page,
-        // which provides more national characters than the original MS-DOS one
-        if ((code_page == 850 || code_page == 858) &&
-            (keyboard_layout == "be" || keyboard_layout == "fr")) {
-                suggestions.emplace_back(859);
-        }
-
-        // Suggest replacing certain code pages with EUR currency variants
-        if (populated.is_using_euro_currency) {
-                switch (code_page) {
-                case 819:  suggestions.emplace_back(61235); break;
-                case 850:  suggestions.emplace_back(858);   break;
-                case 855:  suggestions.emplace_back(872);   break;
-                case 866:  suggestions.emplace_back(808);   break;
-                case 914:  suggestions.emplace_back(58258); break;
-                case 921:  suggestions.emplace_back(901);   break;
-                case 922:  suggestions.emplace_back(902);   break;
-                case 1125: suggestions.emplace_back(848);   break;
-                default: break;
-                }
-        }
-
-	return suggestions;
-}
-
 // ***************************************************************************
 // Locale loading
 // ***************************************************************************
@@ -1197,7 +1155,8 @@ static void change_locale_period()
 	log_country_locale(only_changed_period);
 }
 
-static void preprocess_layouts_arabic(std::vector<KeyboardLayoutMaybeCodepage>& keyboard_layouts)
+static void preprocess_arabic_keyboard_layouts(
+        std::vector<KeyboardLayoutMaybeCodepage>& keyboard_layouts)
 {
 	// Arabic keyboard layouts 'ar462' and 'ar470' differs in one important
 	// aspect: 'ar462' provides Latin layout AZERTY, 'ar470' QWERTY.
@@ -1268,41 +1227,6 @@ static void preprocess_layouts_arabic(std::vector<KeyboardLayoutMaybeCodepage>& 
 	keyboard_layouts = processed;
 }
 
-static void preprocess_layouts_better_code_pages(
-        std::vector<KeyboardLayoutMaybeCodepage>& keyboard_layouts)
-{
-	// Sometimes (depending on various conditions, like other user settings)
-	// we can propose a better code page than default one. There is
-	// no guarantee it will be compatible with the given keyboard layout,
-	// but let's add them to testing/
-	// For code pages left for autodetection, better code page proposals
-	// will be evaluated later/
-
-	std::vector<KeyboardLayoutMaybeCodepage> processed = {};
-
-	for (const auto& source : keyboard_layouts) {
-		if (source.code_page) {
-			for (const auto code_page :
-			     DOS_SuggestBetterCodePages(*source.code_page,
-			                                source.keyboard_layout)) {
-
-				processed.emplace_back(KeyboardLayoutMaybeCodepage{
-				        source.keyboard_layout, code_page});
-			}
-		}
-		processed.emplace_back(source);
-	}
-
-	keyboard_layouts = processed;
-}
-
-static void preprocess_detected_keyboard_layouts(
-        std::vector<KeyboardLayoutMaybeCodepage>& keyboard_layouts)
-{
-	preprocess_layouts_arabic(keyboard_layouts);
-	preprocess_layouts_better_code_pages(keyboard_layouts);
-}
-
 static void sort_detected_keyboard_layouts(
         std::vector<KeyboardLayoutMaybeCodepage>& keyboard_layouts,
         const bool is_layout_list_sorted)
@@ -1322,6 +1246,58 @@ static void sort_detected_keyboard_layouts(
 		}
 		assert(info_map.contains(detected_deduplicated));
 	}
+
+	// Fetch the keyboard layouts matching the GUI language
+	std::vector<std::set<std::string>> layouts_matching_gui = {};
+	auto maybe_add_matching_language = [&](const LanguageTerritory& language) {
+		constexpr size_t MaxMatchingSets = 30;
+
+		if (layouts_matching_gui.size() >= MaxMatchingSets) {
+			return;
+		}
+
+		// Skip this criteria if the host GUI language is either generic
+		// or English; tech-savvy folks often prefer the original GUI
+		// than a translated one
+		if (language.IsEmpty() || language.IsEnglish() || language.IsGeneric()) {
+			return;
+		}
+
+		layouts_matching_gui.emplace_back();
+		for (const auto &layout : language.GetMatchingKeyboardLayouts()) {
+			layouts_matching_gui.back().emplace(deduplicate_layout(layout));
+		}
+	};
+
+	// Always try to match the loaded translation language
+	maybe_add_matching_language(MSG_GetLanguage());
+
+	// If the host OS does not allow the user to prioritize the keyboard
+	// layouts, try to also match the GUI language(s)
+	if (!is_layout_list_sorted) {
+		for (const auto& language : GetHostLanguages().gui_languages) {
+			maybe_add_matching_language(language);
+		}
+	}
+
+	// The highest value returned, the better the keyboard layout matches
+	// the GUI language settings
+	auto get_gui_match_score = [&](const KeyboardLayoutMaybeCodepage& entry) {
+		uint32_t score = 0;
+
+		const auto& info_entry = info_map.at(deduplicate_layout(entry.keyboard_layout));
+		assert(!info_entry.layout_codes.empty());
+		const auto layout_code = deduplicate_layout(info_entry.layout_codes[0]);
+
+		for (const auto& layouts : layouts_matching_gui) {
+			score = score * 2;
+			if (layouts.contains(layout_code)) {
+				score++;
+			}
+		}
+
+		return score;
+	};
 
 	auto get_layout_priority = [&](const KeyboardLayoutMaybeCodepage& entry) {
 		const auto& info_entry = info_map.at(
@@ -1408,6 +1384,13 @@ static void sort_detected_keyboard_layouts(
 				return true;
 			} else if (l.is_mapping_fuzzy && !r.is_mapping_fuzzy) {
 				return false;
+			}
+
+			// Prefer keyboard layouts matching the GUI language
+			const auto l_gui_match_score = get_gui_match_score(l);
+			const auto r_gui_match_score = get_gui_match_score(r);
+			if (l_gui_match_score != r_gui_match_score) {
+				return (l_gui_match_score > r_gui_match_score);
 			}
 
 			// Skip remaining criteria if the host OS provided us
@@ -1521,7 +1504,7 @@ static std::vector<KeyboardLayoutMaybeCodepage> get_detected_keyboard_layouts()
 
 	sort_detected_keyboard_layouts(keyboard_layouts,
 	                               host_locale.is_layout_list_sorted);
-	preprocess_detected_keyboard_layouts(keyboard_layouts);
+	preprocess_arabic_keyboard_layouts(keyboard_layouts);
 
 	return keyboard_layouts;
 }
@@ -1617,17 +1600,14 @@ static void load_keyboard_layout()
 // Lifecycle
 // ***************************************************************************
 
-class DOS_Locale final : public ModuleBase {
+class DOS_Locale {
 public:
-	DOS_Locale(Section* configuration);
-	~DOS_Locale();
+	DOS_Locale(SectionProp& section);
+	~DOS_Locale() = default;
 };
 
-DOS_Locale::DOS_Locale(Section* configuration) : ModuleBase(configuration)
+DOS_Locale::DOS_Locale(SectionProp& section)
 {
-	auto section = static_cast<SectionProp*>(configuration);
-	assert(section);
-
 	if (!config.is_config_loaded) {
 		dos.loaded_codepage    = DefaultCodePage;
 		// Make sure the locale detection is done in a predictable place
@@ -1636,7 +1616,7 @@ DOS_Locale::DOS_Locale(Section* configuration) : ModuleBase(configuration)
 
 	LocalePeriod locale_period = {};
 
-	const auto period_str = section->GetString("locale_period");
+	const auto period_str = section.GetString("locale_period");
 	if (period_str == "native") {
 		locale_period = LocalePeriod::Native;
 	} else if (period_str == "modern") {
@@ -1648,7 +1628,7 @@ DOS_Locale::DOS_Locale(Section* configuration) : ModuleBase(configuration)
 	}
 
 	// Apply country and locale period
-	const auto country_str = section->GetString("country");
+	const auto country_str = section.GetString("country");
 	if (!config.is_config_loaded || country_str != config.country_str) {
 		config.country_str   = country_str;
 		config.locale_period = locale_period;
@@ -1663,29 +1643,11 @@ DOS_Locale::DOS_Locale(Section* configuration) : ModuleBase(configuration)
 		// Has to be done after the country is detected and set up,
 		// as the usage of EUR currency might affect code page
 		// selection
-		config.keyboard_str = section->GetString("keyboard_layout");
+		config.keyboard_str = section.GetString("keyboard_layout");
 		load_keyboard_layout();
 	}
 
 	config.is_config_loaded = true;
-}
-
-DOS_Locale::~DOS_Locale() {}
-
-static std::unique_ptr<DOS_Locale> Locale = {};
-
-void DOS_Locale_ShutDown(Section*)
-{
-	Locale.reset();
-}
-
-void DOS_Locale_Init(Section* sec)
-{
-	assert(sec);
-	Locale = std::make_unique<DOS_Locale>(sec);
-
-	constexpr auto changeable_at_runtime = true;
-	sec->AddDestroyFunction(&DOS_Locale_ShutDown, changeable_at_runtime);
 }
 
 void DOS_Locale_AddMessages()
@@ -1736,3 +1698,16 @@ void DOS_Locale_AddMessages()
 	MSG_Add("KEYBOARD_MOD_ADJECTIVE_LEFT",  "Left");
 	MSG_Add("KEYBOARD_MOD_ADJECTIVE_RIGHT", "Right");
 }
+
+static std::unique_ptr<DOS_Locale> dos_locale = {};
+
+void DOS_Locale_Init(SectionProp& section)
+{
+	dos_locale = std::make_unique<DOS_Locale>(section);
+}
+
+void DOS_Locale_Destroy()
+{
+	dos_locale = {};
+}
+

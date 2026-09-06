@@ -4,13 +4,10 @@
 #ifndef DOSBOX_PROGRAM_MODE_H
 #define DOSBOX_PROGRAM_MODE_H
 
-#include "dos/dos_inc.h"
+#include "dos/dos.h"
 #include "dos/programs.h"
 
 #include <string>
-
-
-enum class FontWidth;
 
 class MODE final : public Program {
 public:
@@ -25,8 +22,10 @@ public:
 	void Run() override;
 
 private:
-	void HandleSetDisplayMode(const std::string& command);
 	bool HandleSetTypematicRate();
+
+	void HandleSetDisplayMode();
+	void SetDisplayMode(const std::string& mode_str);
 
 	static void AddMessages();
 };

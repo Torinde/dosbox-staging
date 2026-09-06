@@ -13,16 +13,21 @@
 #include "private/capture_midi.h"
 #include "private/capture_video.h"
 
+#include "audio/mixer.h"
 #include "config/config.h"
 #include "config/setup.h"
+#include "dosbox.h"
+#include "dosbox_config.h"
 #include "gui/mapper.h"
+#include "gui/titlebar.h"
 #include "image/image_capturer.h"
 #include "misc/support.h"
 #include "utils/checks.h"
 #include "utils/fs_utils.h"
 #include "utils/string_utils.h"
 
-#include <SDL.h>
+// must be included after dosbox_config.h
+#include <SDL3/SDL.h>
 
 CHECK_NARROWING();
 
@@ -350,9 +355,25 @@ void CAPTURE_StartVideoCapture()
 {
 	switch (capture.state.video) {
 	case CaptureState::Off:
+		// Audio and video share the mixer's capture queue. If neither is
+		// currently capturing, drop any stale samples left behind by the
+		// previous session before flipping to `Pending`; `mix_samples()`
+		// still sees `Off` here and won't enqueue fresh samples that the
+		// clear would wipe.
+		//
+		if (capture.state.audio == CaptureState::Off) {
+			MIXER_ClearCaptureQueue();
+		}
 		capture.state.video = CaptureState::Pending;
-		GFX_NotifyVideoCaptureStatus(true);
+
+		TITLEBAR_NotifyVideoCaptureStatus(true);
+
+		if (DOSBOX_IsPaused()) {
+			LOG_MSG("CAPTURE: Preparing to capture video output; "
+					"capturing will start once unpaused");
+		}
 		break;
+
 	case CaptureState::Pending:
 	case CaptureState::InProgress:
 		LOG_WARNING("CAPTURE: Already capturing video output");
@@ -366,17 +387,22 @@ void CAPTURE_StopVideoCapture()
 	case CaptureState::Off:
 		LOG_WARNING("CAPTURE: Not capturing video output");
 		break;
+
 	case CaptureState::Pending:
-		// It's very hard to hit this branch; handling it for
-		// completeness only
-		LOG_MSG("CAPTURE: Cancelling pending video output capture");
 		capture.state.video = CaptureState::Off;
-		GFX_NotifyVideoCaptureStatus(false);
+
+		TITLEBAR_NotifyVideoCaptureStatus(false);
+
+		LOG_MSG("CAPTURE: Stopped capturing video output "
+		        "(no frames were written)");
 		break;
+
 	case CaptureState::InProgress:
 		capture_video_finalise();
 		capture.state.video = CaptureState::Off;
-		GFX_NotifyVideoCaptureStatus(false);
+
+		TITLEBAR_NotifyVideoCaptureStatus(false);
+
 		LOG_MSG("CAPTURE: Stopped capturing video output");
 	}
 }
@@ -448,19 +474,30 @@ static void handle_capture_audio_event(bool pressed)
 
 	switch (capture.state.audio) {
 	case CaptureState::Off:
-		// Capturing the audio output will start in the next few
-		// milliseconds when CAPTURE_AddAudioData is called
+		// See `CAPTURE_StartVideoCapture()` for why we clear the queue
+		// only when no other capture stream is already keeping it active.
+		//
+		if (capture.state.video == CaptureState::Off) {
+			MIXER_ClearCaptureQueue();
+		}
 		capture.state.audio = CaptureState::Pending;
+		if (DOSBOX_IsPaused()) {
+			LOG_MSG("CAPTURE: Preparing to capture audio output; "
+			        "capturing will start with the next audio frame");
+		}
 		break;
+
 	case CaptureState::Pending:
-		// It's practically impossible to hit this branch; handling it
-		// for completeness only
 		capture.state.audio = CaptureState::Off;
-		LOG_MSG("CAPTURE: Cancelled pending audio output capture");
+
+		LOG_MSG("CAPTURE: Stopped capturing audio output "
+		        "(no audio was written)");
 		break;
+
 	case CaptureState::InProgress:
 		capture_audio_finalise();
 		capture.state.audio = CaptureState::Off;
+
 		LOG_MSG("CAPTURE: Stopped capturing audio output");
 		break;
 	}
@@ -482,14 +519,18 @@ static void handle_capture_midi_event(bool pressed)
 		LOG_MSG("CAPTURE: Preparing to capture MIDI output; "
 		        "capturing will start on the first MIDI message");
 		break;
+
 	case CaptureState::Pending:
 		capture.state.midi = CaptureState::Off;
-		LOG_MSG("CAPTURE: Stopped capturing MIDI output before any "
-		        "MIDI message was output (no MIDI file has been created)");
+
+		LOG_MSG("CAPTURE: Stopped capturing MIDI output "
+		        "(no MIDI messages were written)");
 		break;
+
 	case CaptureState::InProgress:
 		capture_midi_finalise();
 		capture.state.midi = CaptureState::Off;
+
 		LOG_MSG("CAPTURE: Stopped capturing MIDI output");
 		break;
 	}
@@ -552,16 +593,39 @@ static void handle_capture_video_event(bool pressed)
 	}
 }
 
-static void capture_destroy(Section* /*sec*/)
+void CAPTURE_Init()
+{
+	const auto section = get_section("capture");
+
+	auto capture_path = section->GetPath("capture_dir");
+
+	// We can safely change the capture output path even if capturing of any
+	// type is in progress.
+	capture.path = capture_path->realpath;
+	if (capture.path.empty()) {
+		LOG_WARNING(
+		        "CAPTURE: No value specified for `capture_dir`; "
+		        "defaulting to 'capture' in the current working directory");
+		capture.path = "capture";
+	}
+
+	const auto prefs = section->GetString("default_image_capture_formats");
+
+	image_capturer = std::make_unique<ImageCapturer>(prefs);
+}
+
+void CAPTURE_Destroy()
 {
 	if (capture.state.audio == CaptureState::InProgress) {
 		capture_audio_finalise();
 		capture.state.audio = CaptureState::Off;
 	}
+
 	if (capture.state.midi == CaptureState::InProgress) {
 		capture_midi_finalise();
 		capture.state.midi = CaptureState::Off;
 	}
+
 	// When destructed, the threaded image capturer instances do a blocking
 	// wait until all pending capture tasks are processed.
 	image_capturer = {};
@@ -574,32 +638,11 @@ static void capture_destroy(Section* /*sec*/)
 	capture.reset();
 }
 
-static void capture_init(Section* sec)
+static void notify_capture_setting_updated([[maybe_unused]] SectionProp& section,
+                                           [[maybe_unused]] const std::string& prop_name)
 {
-	assert(sec);
-	const SectionProp* secprop = dynamic_cast<SectionProp*>(sec);
-	if (!secprop) {
-		return;
-	}
-
-	PropPath* capture_path = secprop->GetPath("capture_dir");
-	assert(capture_path);
-
-	// We can safely change the capture output path even if capturing of any
-	// type is in progress.
-	capture.path = capture_path->realpath;
-	if (capture.path.empty()) {
-		LOG_WARNING("CAPTURE: No value specified for `capture_dir`; defaulting to 'capture' "
-		            "in the current working directory");
-		capture.path = "capture";
-	}
-
-	const std::string prefs = secprop->GetString("default_image_capture_formats");
-
-	image_capturer = std::make_unique<ImageCapturer>(prefs);
-
-	constexpr auto changeable_at_runtime = true;
-	sec->AddDestroyFunction(&capture_destroy, changeable_at_runtime);
+	CAPTURE_Destroy();
+	CAPTURE_Init();
 }
 
 static void init_key_mappings()
@@ -626,19 +669,19 @@ static void init_key_mappings()
 	                  SDL_SCANCODE_UNKNOWN,
 	                  PRIMARY_MOD,
 	                  "rawshot",
-	                  "Raw Screenshot");
+	                  "Raw Scrnshot");
 
 	MAPPER_AddHandler(handle_capture_single_upscaled_screenshot_event,
 	                  SDL_SCANCODE_UNKNOWN,
 	                  PRIMARY_MOD,
 	                  "upscshot",
-	                  "Upsc Screenshot");
+	                  "Upsc Scrnshot");
 
 	MAPPER_AddHandler(handle_capture_single_rendered_screenshot_event,
 	                  SDL_SCANCODE_F5,
 	                  MMOD2,
 	                  "rendshot",
-	                  "Rend Screenshot");
+	                  "Rend Scrnshot");
 
 	MAPPER_AddHandler(handle_capture_video_event,
 	                  SDL_SCANCODE_F7,
@@ -647,23 +690,23 @@ static void init_key_mappings()
 	                  "Rec. Video");
 }
 
-static void init_capture_dosbox_settings(SectionProp& secprop)
+static void init_capture_config_settings(SectionProp& section)
 {
-	constexpr auto when_idle = Property::Changeable::WhenIdle;
+	using enum Property::Changeable::Value;
 
-	auto* path_prop = secprop.AddPath("capture_dir", when_idle, "capture");
+	auto path_prop = section.AddPath("capture_dir", WhenIdle, "capture");
 	path_prop->SetHelp(
 	        "Directory where the various captures are saved, such as audio, video, MIDI\n"
-	        "and screenshot captures. ('capture' in the current working directory by\n"
+	        "and screenshot captures ('capture' in the current working directory by\n"
 	        "default).");
-	assert(path_prop);
 
-	auto* str_prop = secprop.AddString("default_image_capture_formats",
-	                                    when_idle,
-	                                    "upscaled");
+	auto* str_prop = section.AddString("default_image_capture_formats",
+	                                   WhenIdle,
+	                                   "upscaled");
 	str_prop->SetHelp(
 	        "Set the capture format of the default screenshot action ('upscaled' by\n"
-	        "default):\n"
+	        "default). Possible values:\n"
+	        "\n"
 	        "  upscaled:  The image is bilinear-sharp upscaled and the correct aspect\n"
 	        "             ratio is maintained, depending on the 'aspect' setting. The\n"
 	        "             vertical scaling factor is always an integer. For example,\n"
@@ -672,30 +715,28 @@ static void init_capture_dosbox_settings(SectionProp& secprop)
 	        "             1400x1050 (2.1875:3 scaling; fractional horizontally and\n"
 	        "             integer vertically). The filenames of upscaled screenshots\n"
 	        "             have no postfix (e.g. 'image0001.png').\n"
+	        "\n"
 	        "  rendered:  The post-rendered, post-shader image shown on the screen is\n"
 	        "             captured. The filenames of rendered screenshots end with\n"
 	        "             '-rendered' (e.g. 'image0001-rendered.png').\n"
+	        "\n"
 	        "  raw:       The contents of the raw framebuffer is captured (this always\n"
 	        "             results in square pixels). The filenames of raw screenshots\n"
 	        "             end with '-raw' (e.g. 'image0001-raw.png').\n"
+	        "\n"
 	        "If multiple formats are specified separated by spaces, the default\n"
 	        "screenshot action will save multiple images in the specified formats.\n"
 	        "Keybindings for taking single screenshots in specific formats are also\n"
 	        "available.");
-	assert(str_prop);
 }
 
 void CAPTURE_AddConfigSection(const ConfigPtr& conf)
 {
 	assert(conf);
 
-	constexpr auto changeable_at_runtime = true;
+	auto section = conf->AddSection("capture");
+	section->AddUpdateHandler(notify_capture_setting_updated);
 
-	SectionProp* sec = conf->AddSectionProp("capture",
-	                                          &capture_init,
-	                                          changeable_at_runtime);
-	assert(sec);
-	init_capture_dosbox_settings(*sec);
+	init_capture_config_settings(*section);
 	init_key_mappings();
 }
-

@@ -3,6 +3,8 @@
 
 #include "opl.h"
 
+#include "private/gus.h"
+
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
@@ -27,6 +29,8 @@ CHECK_NARROWING();
 constexpr auto OplSampleRateHz = 49716;
 
 static std::unique_ptr<Opl> opl = {};
+
+static std::unique_ptr<OplCapture> opl_capture = {};
 
 static const char* to_string(const OplMode opl_mode)
 {
@@ -438,28 +442,32 @@ void Opl::AudioCallback(const int requested_frames)
 		        fifo.size());
 	}
 #endif
+
+	render_buf.clear();
+
 	auto frames_remaining = requested_frames;
 
-	// First, send any frames we've queued since the last callback
+	// Drain any cycle-accurate frames queued by RenderUpToNow
 	while (frames_remaining && fifo.size()) {
-		channel->AddSamples_sfloat(1, &fifo.front()[0]);
+		render_buf.push_back(fifo.front());
 		fifo.pop();
 		--frames_remaining;
 	}
-	// If the queue's run dry, render the remainder and sync-up our time datum
+	// Render the remainder
 	while (frames_remaining) {
-		const auto frame = RenderFrame();
-		channel->AddSamples_sfloat(1, &frame[0]);
+		render_buf.emplace_back(RenderFrame());
 		--frames_remaining;
 	}
+
+	channel->AddAudioFrames(render_buf);
 	last_rendered_ms = PIC_AtomicIndex();
 }
 
 void Opl::CacheWrite(const io_port_t port, const uint8_t val)
 {
 	// capturing?
-	if (capture) {
-		capture->DoWrite(port, val);
+	if (opl_capture) {
+		opl_capture->DoWrite(port, val);
 	}
 
 	// Store it into the cache
@@ -635,7 +643,7 @@ void Opl::PortWrite(const io_port_t port, const io_val_t value, const io_width_t
 				if (reg.normal == 0x105 && (val & 0x80)) {
 					esfm.mode = EsfmMode::Native;
 
-					if (capture) {
+					if (opl_capture) {
 						LOG_WARNING(
 						        "OPL: ESFM native mode has been enabled "
 						        "which is not supported by the raw OPL "
@@ -796,12 +804,12 @@ static void OPL_SaveRawEvent(const bool pressed)
 	}
 
 	// Are we already recording? If so, close the stream
-	if (opl->capture) {
-		opl->capture.reset();
+	if (opl_capture) {
+		opl_capture.reset();
 
 	} else {
 		// Otherwise start a new recording
-		opl->capture = std::make_unique<OplCapture>(&opl->cache);
+		opl_capture = std::make_unique<OplCapture>(&opl->cache);
 	}
 }
 
@@ -813,7 +821,7 @@ Opl::Opl(Section* configuration, const OplMode _opl_mode)
 
 	opl.mode = _opl_mode;
 
-	SectionProp* section = static_cast<SectionProp*>(configuration);
+	auto section = static_cast<SectionProp*>(configuration);
 	const auto base = static_cast<uint16_t>(section->GetHex("sbbase"));
 
 	ctrl.mixer_enabled = section->GetBool("sbmixer");
@@ -963,7 +971,7 @@ Opl::~Opl()
 	MIXER_UnlockMixerThread();
 }
 
-static void init_opl_dosbox_settings(SectionProp& secprop)
+static void init_opl_config_settings(SectionProp& secprop)
 {
 	constexpr auto deprecated = Property::Changeable::Deprecated;
 	constexpr auto when_idle  = Property::Changeable::WhenIdle;
@@ -975,15 +983,19 @@ static void init_opl_dosbox_settings(SectionProp& secprop)
 	pstring->SetValues(
 	        {"auto", "cms", "opl2", "dualopl2", "opl3", "opl3gold", "esfm", "none"});
 	pstring->SetHelp(
-	        "OPL model to emulate ('auto' by default).\n"
+	        "OPL model to emulate ('auto' by default). Possible values:\n"
+	        "\n"
 	        "  auto:      Use the appropriate model determined by 'sbtype'.\n"
 	        "  opl2:      Yamaha OPL2 (YM3812, mono).\n"
 	        "  dualopl2:  Dual OPL2 (two OPL2 chips in stereo configuration).\n"
 	        "  opl3:      Yamaha OPL3 (YMF262, stereo).\n"
+	        "\n"
 	        "  opl3gold:  OPL3 and the optional AdLib Gold Surround module.\n"
 	        "             Use with 'sbtype = sb16' to emulate the AdLib Gold 1000.\n"
+	        "\n"
 	        "  esfm:      ESS ESFM (enhanced Yamaha OPL3 compatible FM synth).\n"
 	        "  none/off:  Disable OPL emulation.\n"
+	        "\n"
 	        "Notes:\n"
 	        "  - 'sbtype = none' and 'oplmode = opl2' emulates the original AdLib card.\n"
 	        "  - Only 'oplmode = esfm' is not enough to get ESS Enhanced FM music in games;\n"
@@ -992,10 +1004,13 @@ static void init_opl_dosbox_settings(SectionProp& secprop)
 
 	pstring = secprop.AddString("opl_fadeout", when_idle, "off");
 	pstring->SetHelp(
-	        "Fade out hanging notes on the OPL synth:\n"
+	        "Fade out hanging notes on the OPL synth ('off' by default). Possible values:\n"
+	        "\n"
 	        "  off:       Don't fade out hanging notes (default).\n"
+	        "\n"
 	        "  fade:      Fade out hanging notes. You should only enable this in games that\n"
 	        "             sometimes play hanging notes that never stop (e.g., Bard's Tale).\n"
+	        "\n"
 	        "  <custom>:  A custom fade-out definition in the following format:\n"
 	        "               WAIT FADE\n"
 	        "             Where WAIT is how long after the last I/O port write fading begins\n"
@@ -1007,60 +1022,65 @@ static void init_opl_dosbox_settings(SectionProp& secprop)
 
 	auto pbool = secprop.AddBool("opl_remove_dc_bias", when_idle, false);
 	pbool->SetHelp(
-	        "Remove DC bias from the OPL output. This should only be used as a last resort\n"
-	        "to fix popping in games that play PCM audio using the OPL synthesiser on a\n"
-	        "Sound Blaster or AdLib card, such as in: Golden Eagle (1991), Wizardry 6\n"
-	        "(1990), and Wizardry 7 (1992). Please open an issue ticket if you find other\n"
-	        "affected games.");
+	        "Remove DC bias from the OPL output ('off' by default). This should only be used\n"
+	        "as a last resort to fix popping in games that play PCM audio using the OPL\n"
+	        "synthesiser on a Sound Blaster or AdLib card, such as in: Golden Eagle (1991),\n"
+	        "Wizardry 6 (1990), and Wizardry 7 (1992). Please open an issue ticket if you\n"
+	        "find other affected games.");
 
 	pstring = secprop.AddString("oplemu", deprecated, "");
 	pstring->SetHelp("Only 'nuked' OPL emulation is supported now.");
 
 	pstring = secprop.AddString("opl_filter", when_idle, "auto");
 	pstring->SetHelp(
-	        "Type of filter to emulate for the Sound Blaster OPL output:\n"
+	        "Type of filter to emulate for the Sound Blaster OPL output ('auto' by default).\n"
+	        "Possible values:\n"
+	        "\n"
 	        "  auto:      Use the appropriate filter determined by 'sbtype' (default).\n"
+	        "\n"
 	        "  sb1, sb2, sbpro1, sbpro2, sb16:\n"
 	        "             Use the filter of this Sound Blaster model.\n"
+	        "\n"
 	        "  off:       Don't filter the output.\n"
+	        "\n"
 	        "  <custom>:  Custom filter definition; see 'sb_filter' for details.");
 
 	pstring = secprop.AddString("cms", when_idle, "auto");
 	pstring->SetValues({"on", "off", "auto"});
 	pstring->SetHelp(
-	        "Enable CMS emulation ('auto' by default).\n"
+	        "Enable CMS emulation ('auto' by default). Possible values:\n"
+	        "\n"
 	        "  off:   Disable CMS emulation (except when the Game Blaster is selected).\n"
 	        "  on:    Enable CMS emulation on Sound Blaster 1 and 2.\n"
 	        "  auto:  Auto-enable CMS emulation for Sound Blaster 1 and Game Blaster.");
 
 	pstring = secprop.AddString("cms_filter", when_idle, "on");
 	pstring->SetHelp(
-	        "Filter for the Sound Blaster CMS output:\n"
+	        "Filter for the Sound Blaster CMS output ('on' by default). Possible values:\n"
+	        "\n"
 	        "  on:        Filter the output (default).\n"
 	        "  off:       Don't filter the output.\n"
 	        "  <custom>:  Custom filter definition; see 'sb_filter' for details.");
 }
 
-void OPL_ShutDown([[maybe_unused]] Section* sec)
+void OPL_Destroy()
 {
 	opl = {};
 }
 
-void OPL_Init(Section* sec, const OplMode oplmode)
+void OPL_Init(const OplMode oplmode)
 {
-	assert(sec);
-	opl = std::make_unique<Opl>(sec, oplmode);
+	auto section = get_section("sblaster");
+	assert(section);
 
-	constexpr auto changeable_at_runtime = true;
-	sec->AddDestroyFunction(&OPL_ShutDown, changeable_at_runtime);
+	opl = std::make_unique<Opl>(section, oplmode);
 }
 
 // Must be called after SB_AddConfigSection
-void OPL_AddConfigSettings(const ConfigPtr& conf)
+void OPL_AddConfigSettings()
 {
-	assert(conf);
-	auto secprop = static_cast<SectionProp*>(conf->GetSection("sblaster"));
+	auto section = get_section("sblaster");
+	assert(section);
 
-	assert(secprop);
-	init_opl_dosbox_settings(*secprop);
+	init_opl_config_settings(*section);
 }

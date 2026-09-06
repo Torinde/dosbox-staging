@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText:  2020-2025 The DOSBox Staging Team
+// SPDX-FileCopyrightText:  2020-2026 The DOSBox Staging Team
 // SPDX-FileCopyrightText:  2002-2021 The DOSBox Team
 // SPDX-License-Identifier: GPL-2.0-or-later
 
@@ -209,7 +209,7 @@ public:
 	uint8_t *alloc_invalidation_map() const
 	{
 		constexpr size_t map_size = 4096;
-		uint8_t *map = new (std::nothrow) uint8_t[map_size];
+		auto map = new (std::nothrow) uint8_t[map_size];
 		if (!map) {
 			E_Exit("failed to allocate invalidation_map");
 		}
@@ -614,7 +614,7 @@ size_t CacheBlock::Cache::GrowMaskForTypeAt(const uint8_t type_size,
 		if (map_offset_end >= masklen) {
 			size_t new_mask_len = masklen * 4;
 			if (new_mask_len < map_offset_end) {
-				new_mask_len = ((map_offset_end) & ~3) * 2;
+				new_mask_len = (map_offset_end & ~3) * 2;
 			}
 			GrowWriteMask(check_cast<uint16_t>(new_mask_len));
 		}
@@ -727,7 +727,7 @@ static void cache_closeblock()
 	block->link[0].next=nullptr;
 	block->link[1].next=nullptr;
 	// close the block with correct alignment
-	Bitu written = (Bitu)(cache.pos - block->cache.start);
+	auto written = (Bitu)(cache.pos - block->cache.start);
 	if (written>block->cache.size) {
 		if (!block->cache.next) {
 			if (written > block->cache.size + CACHE_MAXSIZE)
@@ -777,12 +777,13 @@ static void cache_closeblock()
 // Replaced silent C-casting with explicit const-casting; when upstream will
 // revert this change bring back the previous version and remove this comment.
 //
+// TODO: change parameter type from const uint8_t* to uint8_t*
 
 // place an 8bit value into the cache
 
 static inline void cache_addb(uint8_t val, const uint8_t *pos)
 {
-	*const_cast<uint8_t *>(pos) = val;
+	*const_cast<uint8_t*>(pos) = val; //-V2018
 }
 
 static inline void cache_addb(uint8_t val)
@@ -795,7 +796,7 @@ static inline void cache_addb(uint8_t val)
 
 static inline void cache_addw(uint16_t val, const uint8_t *pos)
 {
-	write_unaligned_uint16(const_cast<uint8_t *>(pos), val);
+	write_unaligned_uint16(const_cast<uint8_t*>(pos), val); //-V2018
 }
 
 static inline void cache_addw(uint16_t val)
@@ -808,7 +809,7 @@ static inline void cache_addw(uint16_t val)
 
 static inline void cache_addd(uint32_t val, const uint8_t *pos)
 {
-	write_unaligned_uint32(const_cast<uint8_t *>(pos), val);
+	write_unaligned_uint32(const_cast<uint8_t*>(pos), val); //-V2018
 }
 
 static inline void cache_addd(uint32_t val)
@@ -821,7 +822,7 @@ static inline void cache_addd(uint32_t val)
 
 static inline void cache_addq(uint64_t val, const uint8_t *pos)
 {
-	write_unaligned_uint64(const_cast<uint8_t *>(pos), val);
+	write_unaligned_uint64(const_cast<uint8_t*>(pos), val); //-V2018
 }
 
 static inline void cache_addq(uint64_t val)
@@ -849,7 +850,7 @@ static inline void dyn_mem_adjust(void *&ptr, size_t &size)
 	// Use different code on 64K page systems (currently just ppc64le).
 	// The other code will sometimes underrun our pointer into unmapped
 	// memory and mprotect() will then fail.
-	const uintptr_t p = reinterpret_cast<uintptr_t>(ptr);
+	const auto p = reinterpret_cast<uintptr_t>(ptr);
 	const auto align_adjust = p % HostPageSize;
 	const auto p_aligned = p - align_adjust;
 	assert((p_aligned % HostPageSize) == 0);
@@ -905,7 +906,7 @@ static inline void dyn_mem_set_access([[maybe_unused]] void *ptr,
 
 static inline void dyn_mem_execute(void *ptr, size_t size)
 {
-#if defined(C_PER_PAGE_W_OR_X)
+#if C_PER_PAGE_W_OR_X
 	dyn_mem_set_access(ptr, size, true);
 #else
 	// Skip per-page execute-flagging
@@ -914,7 +915,7 @@ static inline void dyn_mem_execute(void *ptr, size_t size)
 
 static inline void dyn_mem_write(void *ptr, size_t size)
 {
-#if defined(C_PER_PAGE_W_OR_X)
+#if C_PER_PAGE_W_OR_X
 	dyn_mem_set_access(ptr, size, false);
 #else
 	// Skip per-page write-flagging
@@ -924,8 +925,10 @@ static inline void dyn_mem_write(void *ptr, size_t size)
 static inline void dyn_cache_invalidate([[maybe_unused]] void *ptr,
                                         [[maybe_unused]] size_t size)
 {
-#if defined(C_PER_PAGE_W_OR_X)
-#	if defined(HAVE_BUILTIN_CLEAR_CACHE)
+	// The instruction cache must always be flushed after writing JIT code,
+	// regardless of the per-page W^X policy. Architectures with split I/D
+	// caches (e.g., PPC64, ARM) will execute stale instructions otherwise.
+#if defined(HAVE_BUILTIN_CLEAR_CACHE)
 	const auto start     = static_cast<char*>(ptr);
 	const auto start_val = reinterpret_cast<uintptr_t>(start);
 	const auto end_val = start_val + size;
@@ -942,9 +945,6 @@ static inline void dyn_cache_invalidate([[maybe_unused]] void *ptr,
 	FlushInstructionCache(GetCurrentProcess(), ptr, size);
 #else
 #error "Don't know how to clear the cache on this platform: please report this"
-#endif
-#else
-	// Skip per-page invalidation
 #endif
 }
 

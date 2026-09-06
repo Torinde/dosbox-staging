@@ -9,7 +9,7 @@
 
 #include "misc/compiler.h"
 
-#include "libs/loguru/loguru.hpp"
+#include "loguru/loguru.hpp"
 
 enum LOG_TYPES {
 	LOG_ALL,
@@ -82,6 +82,11 @@ void GFX_ShowMsg(const char* format, ...)
 #define LOG_TRACE(...)
 #else
 
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wformat-security"
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wformat-security"
+
 template <typename... Args>
 void LOG_DEBUG(const std::string& format, const Args&... args) noexcept
 {
@@ -102,6 +107,8 @@ void LOG_TRACE(const std::string& format, const Args&... args) noexcept
 	DLOG_F(INFO, format_purple.c_str(), args...);
 }
 
+#pragma GCC diagnostic pop
+#pragma clang diagnostic pop
 
 #endif // NDEBUG
 

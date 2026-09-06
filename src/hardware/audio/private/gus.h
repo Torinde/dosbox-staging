@@ -2,10 +2,12 @@
 // SPDX-FileCopyrightText:  2002-2021 The DOSBox Team
 // SPDX-License-Identifier: GPL-2.0-or-later
 
-#include <queue>
+#ifndef DOSBOX_PRIVATE_GUS_H
+#define DOSBOX_PRIVATE_GUS_H
 
 #include "audio/mixer.h"
 #include "hardware/dma.h"
+#include "utils/bit_view.h"
 #include "utils/rwqueue.h"
 
 // Global Constants
@@ -249,6 +251,8 @@ public:
 
 	virtual ~Gus();
 
+	void SetFilter(const std::string& filter_prefs);
+
 	bool CheckTimer(size_t t);
 	void MirrorAdLibCommandRegister(const uint8_t reg_value);
 	void PrintStats();
@@ -313,7 +317,7 @@ private:
 	void WriteToRegister();
 
 	// Collections
-	std::queue<AudioFrame> fifo             = {};
+	std::vector<AudioFrame> fifo            = {};
 	vol_scalars_array_t vol_scalars         = {{}};
 	pan_scalars_array_t pan_scalars         = {{}};
 	ram_array_t ram                         = {};
@@ -372,3 +376,11 @@ private:
 	bool irq_previously_interrupted = false;
 	bool should_change_irq_dma      = false;
 };
+
+// The Gravis UltraSound mirrors the AdLib's command register (written to the
+// command port 388h) on its own port 20Ah. This function passes the command
+// onto the GUS (if available)
+void GUS_MirrorAdLibCommandPortWrite(const io_port_t port, const io_val_t reg_value,
+                                     const io_width_t = io_width_t::byte);
+
+#endif // DOSBOX_PRIVATE_GUS_H

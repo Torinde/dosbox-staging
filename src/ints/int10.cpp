@@ -2,15 +2,16 @@
 // SPDX-FileCopyrightText:  2002-2021 The DOSBox Team
 // SPDX-License-Identifier: GPL-2.0-or-later
 
-
-#include "dosbox.h"
-#include "hardware/memory.h"
+#include "int10.h"
+#include "config/setup.h"
 #include "cpu/callback.h"
 #include "cpu/registers.h"
-#include "hardware/port.h"
-#include "int10.h"
+#include "dosbox.h"
 #include "hardware/input/mouse.h"
-#include "config/setup.h"
+#include "hardware/memory.h"
+#include "hardware/port.h"
+#include "misc/messages.h"
+#include "misc/notifications.h"
 
 Int10Data int10;
 static callback_number_t call_10 = 0;
@@ -926,18 +927,51 @@ static void SetupTandyBios()
 	}
 }
 
-void INT10_Init(Section* /*sec*/)
+static void register_int10_text_messages()
 {
+	MSG_Add("INT10H_CGA_PALETTE_NOT_FOUND",
+	        "CGA palette preset [color=white]'%s'[reset] not found, "
+	        "falling back to default colors");
+
+	MSG_Add("INT10H_CGA_PALETTE_LOAD_FAILED",
+	        "Failed to load CGA palette resource file: [color=white]'%s'[reset], "
+	        "falling back to default colors");
+
+	MSG_Add("INT10H_CGA_PALETTE_MISSING_SECTION",
+	        "Missing [color=light-green][cga_colors][reset] section header in palette file: [color=white]'%s'[reset], "
+	        "falling back to default colors");
+
+	MSG_Add("INT10H_CGA_PALETTE_MISSING_COLOR",
+	        "Palette file [color=white]'%s'[reset] is missing the required color "
+	        "'[color=white]%s[reset]', falling back to default colors");
+
+	MSG_Add("INT10H_CGA_PALETTE_INVALID_COLOR_VALUE",
+	        "Palette file [color=white]'%s'[reset] has an invalid value "
+	        "'[color=white]%s[reset]' for color '[color=white]%s[reset]', "
+	        "falling back to default colors");
+
+	MSG_Add("INT10H_CGA_PALETTE_UNKNOWN_COLOR",
+	        "Palette file [color=white]'%s'[reset] contains an unknown color key "
+	        "'[color=white]%s[reset]', falling back to default colors");
+}
+
+void INT10_Init()
+{
+	register_int10_text_messages();
 	INT10_SetupPalette();
+
 	INT10_InitVGA();
+
 	if (is_machine_pcjr_or_tandy()) {
 		SetupTandyBios();
 	}
-	/* Setup the INT 10 vector */
-	call_10=CALLBACK_Allocate();
-	CALLBACK_Setup(call_10,&INT10_Handler,CB_IRET,"Int 10 video");
-	RealSetVec(0x10,CALLBACK_RealPointer(call_10));
-	//Init the 0x40 segment and init the datastructures in the video rom area
+
+	// Setup the INT 10 vector
+	call_10 = CALLBACK_Allocate();
+	CALLBACK_Setup(call_10, &INT10_Handler, CB_IRET, "Int 10 video");
+	RealSetVec(0x10, CALLBACK_RealPointer(call_10));
+
+	// Init the 0x40 segment and init the datastructures in the video rom area
 	INT10_SetupRomMemory();
 	INT10_Seg40Init();
 	INT10_SetVideoMode(0x3);

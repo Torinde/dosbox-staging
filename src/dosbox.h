@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText:  2019-2025 The DOSBox Staging Team
+// SPDX-FileCopyrightText:  2019-2026 The DOSBox Staging Team
 // SPDX-FileCopyrightText:  2002-2021 The DOSBox Team
 // SPDX-License-Identifier: GPL-2.0-or-later
 
@@ -10,6 +10,7 @@
 #include "misc/messages.h"
 #include "misc/types.h"
 
+#include <functional>
 #include <memory>
 
 // Project name, lower-case and without spaces
@@ -24,17 +25,53 @@
 // Copyright string
 #define DOSBOX_COPYRIGHT "(C) " DOSBOX_TEAM
 
+// Website URL
+#define DOSBOX_WEBSITE "https://www.dosbox-staging.org"
+
+// Address to report bugs
+#define DOSBOX_BUGS_TO "https://github.com/dosbox-staging/dosbox-staging/issues"
+
+// Address of the translation manual
+#define DOSBOX_MANUAL_TRANSLATION \
+	"https://github.com/dosbox-staging/dosbox-staging/blob/main/docs/TRANSLATING.md"
+
 // Fully qualified application ID for the emulator; see
 // https://dbus.freedesktop.org/doc/dbus-specification.html#message-protocol-names
 // for more details
 #define DOSBOX_APP_ID "org.dosbox_staging.dosbox_staging"
 
 
-int sdl_main(int argc, char *argv[]);
+// Must be called to break out of the emulator loop and exit gracefully from
+// all emulation layers.
+void DOSBOX_RequestShutdown();
 
-// The shutdown_requested bool is a conditional break in the parse-loop and
-// machine-loop. Set it to true to gracefully quit in expected circumstances.
-extern bool shutdown_requested;
+bool DOSBOX_IsShutdownRequested();
+
+// Pause API. The emulator is either running or paused. Pause requests come
+// from the user (via hotkeys today; an HTTP API pause endpoint is planned
+// but not yet implemented) and from host-window inactivity (when the
+// `pause_when_inactive` conf setting is enabled).
+//
+// We express only *intent* via these API calls; the actual implementation
+// decides the appropriate course of action (e.g., user pause trumps
+// auto-pausing, and auto-resume never resumes a user pause).
+//
+bool DOSBOX_IsRunning();
+bool DOSBOX_IsPaused();
+
+// True whenever a pause has been requested but not necessarily engaged
+// yet -- covers the SDL fade-out pending window as well as the actually-
+// paused states. Callers that want "user has asked to pause" semantics
+// (e.g. the mixer's fade-to-silence trigger) use this. Callers that care
+// about subsystem state (mixer thread's silence path, capture skip) use
+// `DOSBOX_IsPaused()` instead.
+bool DOSBOX_IsPauseRequested();
+
+void DOSBOX_RequestUserPause();
+void DOSBOX_RequestUserResume();
+
+void DOSBOX_RequestAutoPause();
+void DOSBOX_RequestAutoResume();
 
 // The E_Exit function throws an exception to quit. Call it in unexpected
 // circumstances.
@@ -46,22 +83,28 @@ class SectionProp;
 
 typedef Bitu (LoopHandler)(void);
 
+void DOSBOX_Init();
+void DOSBOX_Destroy();
+
+void DOSBOX_InitModuleConfigsAndMessages();
+void DOSBOX_InitModules();
+void DOSBOX_DestroyModules();
+
 const char* DOSBOX_GetVersion() noexcept;
 const char* DOSBOX_GetDetailedVersion() noexcept;
-
-double DOSBOX_GetUptime();
 
 void DOSBOX_RunMachine();
 void DOSBOX_SetLoop(LoopHandler * handler);
 void DOSBOX_SetNormalLoop();
 
-void DOSBOX_InitAllModuleConfigsAndMessages(void);
-
-void DOSBOX_SetMachineTypeFromConfig(SectionProp* section);
+void DOSBOX_SetMachineTypeFromConfig(SectionProp& section);
 
 int64_t DOSBOX_GetTicksDone();
 void DOSBOX_SetTicksDone(const int64_t ticks_done);
 void DOSBOX_SetTicksScheduled(const int64_t ticks_scheduled);
+
+void DOSBOX_Restart();
+void DOSBOX_Restart(std::vector<std::string>& parameters);
 
 enum class MachineType {
 	// Value not set yet
@@ -156,15 +199,20 @@ inline bool is_machine_hercules() {
 #include "misc/logging.h"
 #endif // the logging system.
 
-constexpr auto DefaultMt32RomsDir   = "mt32-roms";
-constexpr auto DefaultSoundfontsDir = "soundfonts";
-constexpr auto GlShadersDir         = "glshaders";
-constexpr auto DiskNoiseDir         = "disknoises";
-constexpr auto PluginsDir           = "plugins";
+constexpr auto DefaultMt32RomsDir        = "mt32-roms";
+constexpr auto DefaultSoundCanvasRomsDir = "soundcanvas-roms";
+constexpr auto DefaultSoundfontsDir      = "soundfonts";
+constexpr auto DefaultWebserverDir       = "webserver";
+constexpr auto DiskNoisesDir             = "disk-noises";
+constexpr auto PluginsDir                = "plugins";
+constexpr auto ShaderPresetsDir          = "shader-presets";
+constexpr auto ShadersDir                = "shaders";
 
 constexpr auto MicrosInMillisecond = 1000;
 constexpr auto BytesPerKilobyte    = 1024;
+constexpr auto BytesPerMegabyte = BytesPerKilobyte * 1024;
+constexpr int64_t BytesPerGigabyte = BytesPerMegabyte * 1024;
 
 enum class DiskSpeed { Maximum, Fast, Medium, Slow };
 
-#endif /* DOSBOX_DOSBOX_H */
+#endif // DOSBOX_DOSBOX_H

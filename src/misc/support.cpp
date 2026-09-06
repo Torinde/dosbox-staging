@@ -20,11 +20,11 @@
 #include <stdexcept>
 #include <string>
 
-#include "misc/cross.h"
 #include "debugger/debugger.h"
+#include "misc/cross.h"
+#include "misc/video.h"
 #include "utils/fs_utils.h"
 #include "utils/string_utils.h"
-#include "misc/video.h"
 
 #include "whereami.h"
 
@@ -279,14 +279,21 @@ static void maybe_add_path(const std_fs::path& path, std::vector<std_fs::path>& 
 	if (!std_fs::is_directory(path, ec)) {
 		return;
 	}
+
 	// Filter out duplicates by first canonicalizing the path
 	// and then checking if it already exists in the paths vector.
-	// Ex: /usr/share/dosbox-staging and get_executable_path() /../share can point to the same location
+	// Ex: /usr/share/dosbox-staging and get_executable_path() /../share can
+	// point to the same location
 	const auto canonical_path = std_fs::canonical(path, ec);
+
 	if (ec) {
-		LOG_ERR("RESOURCE: Failed to canonicalize path '%s': %s", path.string().c_str(), ec.message().c_str());
-	} else if (std::find(paths.begin(), paths.end(), canonical_path) == paths.end()) {
-		paths.emplace_back(std::move(canonical_path));
+		LOG_ERR("RESOURCE: Failed to canonicalize path '%s': %s",
+		        path.string().c_str(),
+		        ec.message().c_str());
+
+	} else if (std::find(paths.begin(), paths.end(), canonical_path) ==
+	           paths.end()) {
+		paths.emplace_back(canonical_path);
 	}
 }
 
@@ -315,7 +322,6 @@ const std::vector<std_fs::path>& get_resource_parent_paths()
 
 	// Third priority is the install path set at compile time.
 	// In CMake this is the CMAKE_INSTALL_DATADIR variable.
-	// In Meson it is set by --datadir.
 	maybe_add_path(std_fs::path(CUSTOM_DATADIR) / DOSBOX_PROJECT_NAME, paths);
 
 	// Fourth priority is the user and system XDG data specification
@@ -336,7 +342,7 @@ const std::vector<std_fs::path>& get_resource_parent_paths()
 #endif
 
 	// Last priority is the user's configuration directory
-	maybe_add_path(GetConfigDir(), paths);
+	maybe_add_path(get_config_dir(), paths);
 
 	return paths;
 }
@@ -368,7 +374,7 @@ std::vector<std_fs::path> get_plugin_paths()
 	maybe_add_path(get_executable_path() / "../share" / DOSBOX_PROJECT_NAME / PluginsDir, paths);
 #endif
 
-	maybe_add_path(GetConfigDir() / PluginsDir, paths);
+	maybe_add_path(get_config_dir() / PluginsDir, paths);
 
 	return paths;
 }
@@ -400,6 +406,7 @@ template std::function<int16_t()> create_randomizer<int16_t>(const int16_t,
 
 template std::function<float()> create_randomizer<float>(const float, const float);
 
+// TODO should return optional
 // Return the first existing resource
 std_fs::path get_resource_path(const std_fs::path& name)
 {

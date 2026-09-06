@@ -1,10 +1,10 @@
-// SPDX-FileCopyrightText:  2022-2025 The DOSBox Staging Team
+// SPDX-FileCopyrightText:  2022-2026 The DOSBox Staging Team
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include "mouse.h"
 
-#include "mouse_config.h"
-#include "mouse_interfaces.h"
+#include "private/mouse_config.h"
+#include "private/mouse_interfaces.h"
 
 #include <algorithm>
 
@@ -45,8 +45,12 @@ static struct {
 	float delta_wheel = 0.0f;   // accumulated mouse wheel movement
 } vmware;
 
-static bool use_relative = true; // true = ignore absolute mouse position, use relative
-static bool is_input_raw = true; // true = no host mouse acceleration pre-applied
+// true = ignore absolute mouse position, use relative
+static bool use_relative = true;
+// true = no host mouse acceleration pre-applied
+static bool is_input_raw = true;
+// true = trigger interrupt without waiting and creating the data packet
+static bool immediate_interrupts = false;
 
 static float pos_x = 0.0f; // absolute mouse position in guest-side pixels
 static float pos_y = 0.0f;
@@ -57,7 +61,7 @@ static uint16_t scaled_y = 0x7fff; // 0x7fff is a center position
 // Multiply scale by 0.02f to put acceleration_vmm in a reasonable
 // range, similar to sensitivity_dos or sensitivity_vmm)
 constexpr float acceleration_multiplier = 0.02f;
-static MouseSpeedCalculator speed_xy(acceleration_multiplier *mouse_predefined.acceleration_vmm);
+static MouseSpeedCalculator speed_xy(acceleration_multiplier * Mouse::AccelerationVmm);
 
 // ***************************************************************************
 // Internal helper routines
@@ -70,10 +74,11 @@ static void maybe_check_remove_mappings()
 	}
 
 	bool needs_warning = false;
-	for (const auto& interface : mouse_interfaces) {
-		if (interface->IsMapped()) {
+	for (const auto interface_id : AllMouseInterfaceIds) {
+		auto& interface = MouseInterface::GetInstance(interface_id);
+		if (interface.IsMapped()) {
 			needs_warning = true;
-			interface->ConfigUnMap();
+			interface.ConfigUnMap();
 		}
 	}
 
@@ -88,7 +93,7 @@ static void maybe_check_remove_mappings()
 
 bool MOUSEVMM_IsSupported(const MouseVmmProtocol protocol)
 {
-	if (mouse_config.model_ps2 == MouseModelPS2::NoMouse) {
+	if (mouse_config.model_ps2 == MouseModelPs2::NoMouse) {
 		return false;
 	}
 
@@ -101,6 +106,11 @@ bool MOUSEVMM_IsSupported(const MouseVmmProtocol protocol)
 	}
 
 	return false;
+}
+
+void MOUSEVMM_EnableImmediateInterrupts(const bool enable)
+{
+	immediate_interrupts = enable;
 }
 
 void MOUSEVMM_Activate(const MouseVmmProtocol protocol)
@@ -130,7 +140,7 @@ void MOUSEVMM_Activate(const MouseVmmProtocol protocol)
 			pos_y = static_cast<float>(mouse_shared.resolution_y) / 2.0f;
 			scaled_x = 0;
 			scaled_y = 0;
-			MOUSEPS2_NotifyMovedDummy();
+			MOUSEPS2_NotifyInterruptNeeded(immediate_interrupts);
 		}
 	}
 
@@ -283,7 +293,7 @@ void MOUSEVMM_NotifyMoved(const float x_rel, const float y_rel,
 	}
 
 	vmware.updated = vmware.is_active;
-	MOUSEPS2_NotifyMovedDummy();
+	MOUSEPS2_NotifyInterruptNeeded(immediate_interrupts);
 }
 
 void MOUSEVMM_NotifyButton(const MouseButtons12S buttons_12S)
@@ -305,7 +315,7 @@ void MOUSEVMM_NotifyButton(const MouseButtons12S buttons_12S)
 	}
 
 	vmware.updated = vmware.is_active;
-	MOUSEPS2_NotifyMovedDummy();
+	MOUSEPS2_NotifyInterruptNeeded(immediate_interrupts);
 }
 
 void MOUSEVMM_NotifyWheel(const float w_rel)
@@ -327,7 +337,7 @@ void MOUSEVMM_NotifyWheel(const float w_rel)
 	}
 
 	vmware.updated = vmware.is_active;
-	MOUSEPS2_NotifyMovedDummy();
+	MOUSEPS2_NotifyInterruptNeeded(immediate_interrupts);
 }
 
 void MOUSEVMM_NewScreenParams(const float x_abs, const float y_abs)

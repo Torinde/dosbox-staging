@@ -1,22 +1,27 @@
-// SPDX-FileCopyrightText:  2023-2025 The DOSBox Staging Team
+// SPDX-FileCopyrightText:  2023-2026 The DOSBox Staging Team
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include "titlebar.h"
 
-#include <SDL.h>
 #include <map>
 #include <vector>
+
+#include "private/common.h"
 
 #include "config/config.h"
 #include "config/setup.h"
 #include "cpu/cpu.h"
 #include "dosbox.h"
+#include "dosbox_config.h"
 #include "gui/mapper.h"
-#include "gui/sdlmain.h"
+#include "hardware/input/mouse.h"
 #include "misc/support.h"
 #include "misc/unicode.h"
 #include "misc/video.h"
 #include "utils/checks.h"
+
+// must be included after dosbox_config.h
+#include <SDL3/SDL.h>
 
 CHECK_NARROWING();
 
@@ -118,11 +123,12 @@ static bool is_animation_running()
 	return state.timer_id != 0;
 }
 
-static uint32_t animation_tick(uint32_t /* interval */, void* /* name */)
+static uint32_t animation_tick([[maybe_unused]] void* userdata,
+							   [[maybe_unused]] SDL_TimerID timer_id,
+                               [[maybe_unused]] uint32_t interval)
 {
 	SDL_Event event = {};
-	event.user.type = enum_val(SDL_DosBoxEvents::RefreshAnimatedTitle);
-	event.user.type += sdl.start_event_id;
+	event.user.type = GFX_GetUserSdlEventId(DosBoxSdlEvent::RefreshAnimatedTitle);
 
 	// We are outside of the main thread; we can't update the window title
 	// here, SDL does not like it - we have to go through the event queue
@@ -271,7 +277,7 @@ static std::string get_mouse_hint()
 static void maybe_add_muted_mark(std::string& title_str)
 {
 	// Do not add 'mute' tag if emulator is paused
-	if (state.is_audio_muted && !sdl.is_paused) {
+	if (state.is_audio_muted && !GFX_IsPaused()) {
 		title_str = BeginTag + MSG_GetTranslatedRaw("TITLEBAR_MUTED") +
 		            EndTag + title_str;
 	}
@@ -279,7 +285,7 @@ static void maybe_add_muted_mark(std::string& title_str)
 
 static void maybe_add_recording_pause_mark(std::string& title_str)
 {
-	if (sdl.is_paused) {
+	if (GFX_IsPaused()) {
 		title_str = BeginTag + MSG_GetTranslatedRaw("TITLEBAR_PAUSED") +
 		            EndTag + title_str;
 		return;
@@ -305,6 +311,14 @@ static void maybe_add_recording_pause_mark(std::string& title_str)
 
 static void set_window_title()
 {
+	// The CPU subsystem is initialised before the GUI, so the cycles
+	// changed notifications must be no-ops if we don't have the application
+	// window up yet.
+	const auto window = GFX_GetWindow();
+	if (!window) {
+		return;
+	}
+
 	static std::string last_title_str = {};
 
 	auto new_title_str = state.title_no_tags;
@@ -313,12 +327,12 @@ static void set_window_title()
 	maybe_add_recording_pause_mark(new_title_str);
 
 	if (new_title_str != last_title_str) {
-		SDL_SetWindowTitle(sdl.window, new_title_str.c_str());
+		SDL_SetWindowTitle(window, new_title_str.c_str());
 		last_title_str = new_title_str;
 	}
 }
 
-void GFX_RefreshAnimatedTitle()
+void TITLEBAR_RefreshAnimatedTitle()
 {
 	if (!is_animation_running()) {
 		return;
@@ -328,7 +342,7 @@ void GFX_RefreshAnimatedTitle()
 	set_window_title();
 }
 
-void GFX_RefreshTitle()
+void TITLEBAR_RefreshTitle()
 {
 	// Running program name
 	state.title_no_tags = get_running_program_name();
@@ -364,7 +378,7 @@ void GFX_RefreshTitle()
 
 	// Start/stop animation if needed
 	const bool is_capturing = state.is_capturing_audio || state.is_capturing_video;
-	if (config.animated_record_mark && !sdl.is_paused && is_capturing) {
+	if (config.animated_record_mark && !GFX_IsPaused() && is_capturing) {
 		maybe_start_animation();
 	} else {
 		maybe_stop_animation();
@@ -378,38 +392,38 @@ void GFX_RefreshTitle()
 // External notifications and setter functions
 // ***************************************************************************
 
-void GFX_NotifyBooting()
+void TITLEBAR_NotifyBooting()
 {
 	state.is_guest_os_booted = true;
-	GFX_RefreshTitle();
+	TITLEBAR_RefreshTitle();
 }
 
-void GFX_NotifyAudioCaptureStatus(const bool is_capturing)
+void TITLEBAR_NotifyAudioCaptureStatus(const bool is_capturing)
 {
 	if (state.is_capturing_audio != is_capturing) {
 		state.is_capturing_audio = is_capturing;
-		GFX_RefreshTitle();
+		TITLEBAR_RefreshTitle();
 	}
 }
 
-void GFX_NotifyVideoCaptureStatus(const bool is_capturing)
+void TITLEBAR_NotifyVideoCaptureStatus(const bool is_capturing)
 {
 	if (state.is_capturing_video != is_capturing) {
 		state.is_capturing_video = is_capturing;
-		GFX_RefreshTitle();
+		TITLEBAR_RefreshTitle();
 	}
 }
 
-void GFX_NotifyAudioMutedStatus(const bool is_muted)
+void TITLEBAR_NotifyAudioMutedStatus(const bool is_muted)
 {
 	if (state.is_audio_muted != is_muted) {
 		state.is_audio_muted = is_muted;
-		GFX_RefreshTitle();
+		TITLEBAR_RefreshTitle();
 	}
 }
 
-void GFX_NotifyProgramName(const std::string& segment_name,
-                           const std::string& canonical_name)
+void TITLEBAR_NotifyProgramName(const std::string& segment_name,
+                                const std::string& canonical_name)
 {
 	constexpr auto ConvertMode = DosStringConvertMode::ScreenCodesOnly;
 
@@ -426,19 +440,19 @@ void GFX_NotifyProgramName(const std::string& segment_name,
 	// Store new names as UTF-8, refresh titlebar
 	state.segment_name   = dos_to_utf8(segment_name_dos, ConvertMode);
 	state.canonical_name = dos_to_utf8(canonical_name, ConvertMode);
-	GFX_RefreshTitle();
+	TITLEBAR_RefreshTitle();
 }
 
-void GFX_NotifyCyclesChanged()
+void TITLEBAR_NotifyCyclesChanged()
 {
-	GFX_RefreshTitle();
+	TITLEBAR_RefreshTitle();
 }
 
 void GFX_SetMouseHint(const MouseHint hint_id)
 {
 	if (hint_id != state.mouse_hint_id) {
 		state.mouse_hint_id = hint_id;
-		GFX_RefreshTitle();
+		TITLEBAR_RefreshTitle();
 	}
 }
 
@@ -695,30 +709,36 @@ static void parse_config(const std::string& new_setting_str)
 	}
 }
 
-void TITLEBAR_ReadConfig(const SectionProp& secprop)
+void TITLEBAR_ReadConfig()
 {
-	parse_config(secprop.GetString("window_titlebar"));
+	const auto section = get_sdl_section();
+	assert(section);
 
-	GFX_RefreshTitle();
+	parse_config(section->GetString("window_titlebar"));
+
+	TITLEBAR_RefreshTitle();
 }
 
-void TITLEBAR_AddConfig(SectionProp& secprop)
+void TITLEBAR_AddConfigSettings()
 {
+	const auto section = get_sdl_section();
+
 	constexpr auto always = Property::Changeable::Always;
 
 	PropString* prop_str = nullptr;
 
-	prop_str = secprop.AddString("window_titlebar",
+	prop_str = section->AddString("window_titlebar",
 	                              always,
 	                              "program=name dosbox=auto cycles=on mouse=full");
 	prop_str->SetHelp(
 	        "Space separated list of information to be displayed in the window's titlebar\n"
 	        "('program=name dosbox=auto cycles=on mouse=full' by default). If a parameter\n"
-	        "is not specified, its default value is used.\n"
-	        "Possible information to display are:\n"
+	        "is not specified, its default value is used. Possible information to display:\n"
+	        "\n"
 	        "  animation=<value>:  If set to 'on' (default), animate the audio/video\n"
 	        "                      recording mark. Set to 'off' to disable animation; this\n"
 	        "                      is useful if your screen font produces weird results.\n"
+	        "\n"
 	        "  program=<value>:    Display the name of the running program.\n"
 	        "                      <value> can be one of:\n"
 	        "                        none/off:  Do not display program name.\n"
@@ -727,21 +747,26 @@ void TITLEBAR_AddConfig(SectionProp& secprop)
 	        "                        segment:   Display program memory segment name.\n"
 	        "                        'Title':   Custom name. Alternatively, you can use\n"
 	        "                                   \"Title\", (Title), <Title> or [Title] form.\n"
-	        "                      Note: With some software (like Windows 3.1x in enhanced\n"
+	        "\n"
+	        "                      Note: With some software (like Windows 3.1 in enhanced\n"
 	        "                      mode) it is impossible to recognize the full program\n"
 	        "                      name or path; in such cases 'segment' is used instead.\n"
+	        "\n"
 	        "  dosbox=<value>:     Display 'DOSBox Staging' in the title bar.\n"
 	        "                      <value> can be one of:\n"
 	        "                        always:   Always display 'DOSBox Staging'.\n"
 	        "                        auto:     Only display it if no program is running or\n"
 	        "                                  'program=none' is set (default).\n"
+	        "\n"
 	        "  version=<value>:    Display DOSBox version information.\n"
 	        "                      <value> can be one of:\n"
 	        "                         none/off:  Do not display DOSBox version (default).\n"
 	        "                         simple:    Simple version information.\n"
 	        "                         detailed:  Include Git hash, if available.\n"
+	        "\n"
 	        "  cycles=<value>:     If set to 'on' (default), show CPU cycles setting.\n"
 	        "                      Set to 'off' to disable cycles setting display.\n"
+	        "\n"
 	        "  mouse=<value>:      Mouse capturing hint verbosity level:\n"
 	        "                        none/off:  Do not display any mouse hints.\n"
 	        "                        short:     Only display if mouse is captured.\n"
@@ -760,9 +785,11 @@ void TITLEBAR_AddMessages()
 	MSG_Add("TITLEBAR_HINT_CAPTURED_HOTKEY", "mouse captured, %s+F10 to release");
 	MSG_Add("TITLEBAR_HINT_CAPTURED_HOTKEY_MIDDLE",
 	        "mouse captured, %s+F10 or middle-click to release");
+
 	MSG_Add("TITLEBAR_HINT_RELEASED_HOTKEY", "to capture the mouse press %s+F10");
 	MSG_Add("TITLEBAR_HINT_RELEASED_HOTKEY_MIDDLE",
 	        "to capture the mouse press %s+F10 or middle-click");
+
 	MSG_Add("TITLEBAR_HINT_RELEASED_HOTKEY_ANY_BUTTON",
 	        "to capture the mouse press %s+F10 or click any button");
 	MSG_Add("TITLEBAR_HINT_SEAMLESS_HOTKEY", "seamless mouse, %s+F10 to capture");

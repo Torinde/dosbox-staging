@@ -1,7 +1,10 @@
-// SPDX-FileCopyrightText:  2021-2025 The DOSBox Staging Team
+// SPDX-FileCopyrightText:  2021-2026 The DOSBox Staging Team
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include "private/ps1audio.h"
+
+#include "private/mame/emu.h"
+#include "private/mame/sn76496.h"
 
 #include <algorithm>
 #include <cassert>
@@ -14,8 +17,6 @@
 #include "config/setup.h"
 #include "dosbox.h"
 #include "hardware/dma.h"
-#include "hardware/mame/emu.h"
-#include "hardware/mame/sn76496.h"
 #include "hardware/memory.h"
 #include "hardware/pic.h"
 #include "hardware/port.h"
@@ -90,8 +91,9 @@ Ps1Dac::Ps1Dac(const std::string& filter_choice)
 
 	} else if (!channel->TryParseAndSetCustomFilter(filter_choice)) {
 		LOG_WARNING(
-		        "PS1DAC: Invalid 'ps1audio_dac_filter' setting: '%s', "
+		        "%s: Invalid 'ps1audio_dac_filter' setting: '%s', "
 		        "using 'on'",
+		        ChannelName::Ps1AudioCardDac,
 		        filter_choice.c_str());
 
 		const auto filter_enabled = true;
@@ -243,7 +245,7 @@ void Ps1Dac::WriteTimingPort203(io_port_t, io_val_t value, io_width_t)
 	adder = (data_rate_hz << FracShift) / sample_rate_hz;
 
 	regs.status = CalcStatus();
-	if ((regs.status & FifoNearlyEmptyFlag) && (can_trigger_irq)) {
+	if ((regs.status & FifoNearlyEmptyFlag) && can_trigger_irq) {
 		// Generate request for stuff.
 		regs.status |= FifoIrqFlag;
 		can_trigger_irq = false;
@@ -307,7 +309,7 @@ void Ps1Dac::PicCallback(const int frames_requested)
 		regs.status = CalcStatus();
 		pending     = static_cast<int32_t>(bytes_pending);
 		add         = adder;
-		if ((regs.status & FifoNearlyEmptyFlag) && (can_trigger_irq)) {
+		if ((regs.status & FifoNearlyEmptyFlag) && can_trigger_irq) {
 			// More bytes needed.
 			regs.status |= FifoIrqFlag;
 			can_trigger_irq = false;
@@ -389,6 +391,7 @@ private:
 	MixerChannelPtr channel            = nullptr;
 	IO_WriteHandleObject write_handler = {};
 	std::queue<float> fifo             = {};
+	std::vector<float> render_buf      = {};
 	std::mutex mutex                   = {};
 	sn76496_device device;
 
@@ -433,8 +436,9 @@ Ps1Synth::Ps1Synth(const std::string& filter_choice)
 
 	} else if (!channel->TryParseAndSetCustomFilter(filter_choice)) {
 		LOG_WARNING(
-		        "PS1: Invalid 'ps1audio_filter' setting: '%s', "
+		        "%s: Invalid 'ps1audio_filter' setting: '%s', "
 		        "using 'on'",
+		        ChannelName::Ps1AudioCardPsg,
 		        filter_choice.c_str());
 
 		const auto filter_enabled = true;
@@ -499,23 +503,31 @@ void Ps1Synth::AudioCallback(const int requested_frames)
 
 	std::lock_guard lock(mutex);
 
-	// if (fifo.size())
-	//	LOG_MSG("PS1: Queued %2lu cycle-accurate frames", fifo.size());
+#if 0
+	if (fifo.size()) {
+		LOG_MSG("%s: Queued %2lu cycle-accurate frames",
+		        ChannelName::Ps1AudioCardPsg,
+		        fifo.size());
+	}
+#endif
+
+	render_buf.clear();
 
 	auto frames_remaining = requested_frames;
 
-	// First, send any frames we've queued since the last callback
+	// Drain any cycle-accurate frames queued by RenderUpToNow
 	while (frames_remaining && fifo.size()) {
-		channel->AddSamples_mfloat(1, &fifo.front());
+		render_buf.push_back(fifo.front());
 		fifo.pop();
 		--frames_remaining;
 	}
-	// If the queue's run dry, render the remainder and sync-up our time datum
+	// Render the remainder
 	while (frames_remaining) {
-		float sample = RenderSample();
-		channel->AddSamples_mfloat(1, &sample);
+		render_buf.emplace_back(RenderSample());
 		--frames_remaining;
 	}
+
+	channel->AddSamples_mfloat(requested_frames, render_buf.data());
 	last_rendered_ms = PIC_AtomicIndex();
 }
 
@@ -544,6 +556,7 @@ void PS1DAC_NotifyLockMixer()
 		ps1_dac->output_queue.Stop();
 	}
 }
+
 void PS1DAC_NotifyUnlockMixer()
 {
 	if (ps1_dac) {
@@ -551,36 +564,83 @@ void PS1DAC_NotifyUnlockMixer()
 	}
 }
 
-static void PS1AUDIO_ShutDown([[maybe_unused]] Section* sec)
-{
-	LOG_MSG("PS1: Shutting down IBM PS/1 Audio card");
-	ps1_dac.reset();
-	ps1_synth.reset();
-}
-
 bool PS1AUDIO_IsEnabled()
 {
 	const auto section = control->GetSection("speaker");
 	assert(section);
+
 	const auto properties = static_cast<SectionProp*>(section);
 	return properties->GetBool("ps1audio");
 }
 
-void PS1AUDIO_Init(Section* section)
+static void init_ps1audio_settings(SectionProp& section)
 {
-	assert(section);
-	const auto prop = static_cast<SectionProp*>(section);
+	using enum Property::Changeable::Value;
 
+	auto pbool = section.AddBool("ps1audio", WhenIdle, false);
+	pbool->SetHelp("Enable IBM PS/1 Audio emulation ('off' by default).");
+
+	auto pstring = section.AddString("ps1audio_filter", WhenIdle, "on");
+	pstring->SetHelp(
+	        "Filter for the PS/1 Audio synth output ('on' by default). Possible values:\n"
+	        "\n"
+	        "  on:        Filter the output (default).\n"
+	        "  off:       Don't filter the output.\n"
+	        "  <custom>:  Custom filter definition; see 'sb_filter' for details.");
+
+	pstring = section.AddString("ps1audio_dac_filter", WhenIdle, "on");
+	pstring->SetHelp(
+	        "Filter for the PS/1 Audio DAC output ('on' by default). Possible values:\n"
+	        "\n"
+	        "  on:        Filter the output (default).\n"
+	        "  off:       Don't filter the output.\n"
+	        "  <custom>:  Custom filter definition; see 'sb_filter' for details.");
+}
+
+void PS1AUDIO_Init(SectionProp& section)
+{
 	if (!PS1AUDIO_IsEnabled()) {
 		return;
 	}
 
-	ps1_dac = std::make_unique<Ps1Dac>(prop->GetString("ps1audio_dac_filter"));
+	ps1_dac = std::make_unique<Ps1Dac>(section.GetString("ps1audio_dac_filter"));
+	ps1_synth = std::make_unique<Ps1Synth>(section.GetString("ps1audio_filter"));
 
-	ps1_synth = std::make_unique<Ps1Synth>(prop->GetString("ps1audio_filter"));
+	LOG_MSG("%s: Initialised IBM PS/1 Audio card", ChannelName::Ps1AudioCardPsg);
+}
 
-	LOG_MSG("PS1: Initialised IBM PS/1 Audio card");
+void PS1AUDIO_Destroy()
+{
+	if (ps1_dac || ps1_synth) {
+		LOG_MSG("%s: Shutting down IBM PS/1 Audio card",
+		        ChannelName::Ps1AudioCardPsg);
 
-	constexpr auto ChangeableAtRuntime = true;
-	section->AddDestroyFunction(&PS1AUDIO_ShutDown, ChangeableAtRuntime);
+		ps1_dac.reset();
+		ps1_synth.reset();
+	}
+}
+
+void PS1AUDIO_NotifySettingUpdated(SectionProp& section,
+                                   [[maybe_unused]] const std::string& prop_name)
+{
+	// The [speaker] section controls multiple audio devices, so we want to
+	// make sure to only restart the device affected by the setting.
+	//
+	if (prop_name == "ps1audio" || prop_name == "ps1audio_filter" ||
+	    prop_name == "ps1audio_dac_filter") {
+
+		PS1AUDIO_Destroy();
+		PS1AUDIO_Init(section);
+	}
+
+	// TODO support changing filter params without restarting the device
+}
+
+void PS1AUDIO_AddConfigSection(Section* sec)
+{
+	assert(sec);
+
+	const auto section = static_cast<SectionProp*>(sec);
+
+	init_ps1audio_settings(*section);
 }

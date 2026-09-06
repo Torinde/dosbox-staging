@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText:  2023-2025 The DOSBox Staging Team
+// SPDX-FileCopyrightText:  2023-2026 The DOSBox Staging Team
 // SPDX-FileCopyrightText:  2002-2021 The DOSBox Team
 // SPDX-FileCopyrightText:  Aaron Giles
 // SPDX-FileCopyrightText:  kekko
@@ -68,15 +68,16 @@
 #include <cstring>
 #include <mutex>
 
-#include <SDL.h>
-#include <SDL_cpuinfo.h> // for proper SSE defines for MSVC
+#include <SDL3/SDL.h>
+#include <SDL3/SDL_cpuinfo.h> // for proper SSE defines for MSVC
 
 #include "vga.h"
 
 #include "config/config.h"
 #include "config/setup.h"
 #include "cpu/paging.h"
-#include "gui/render.h"
+#include "gui/common.h"
+#include "gui/render/render.h"
 #include "hardware/memory.h"
 #include "hardware/pci_bus.h"
 #include "hardware/pic.h"
@@ -177,11 +178,7 @@ struct rectangle
 #define ACCESSING_BITS_16_31			((mem_mask & 0xffff0000) != 0)
 
 //// constants for expression endianness
-#ifndef WORDS_BIGENDIAN
 #define NATIVE_ENDIAN_VALUE_LE_BE(leval,beval)	(leval)
-#else
-#define NATIVE_ENDIAN_VALUE_LE_BE(leval,beval)	(beval)
-#endif
 
 #define BYTE4_XOR_LE(a) 				((a) ^ NATIVE_ENDIAN_VALUE_LE_BE(0,3))
 
@@ -346,10 +343,10 @@ static constexpr uint8_t dither_matrix_2x2[16] =
 #define EXTRACT_555x_TO_888(val, a, b, c)					\
 	(a) = (((val) >> 8) & 0xf8) | (((val) >> 13) & 0x07);	\
 	(b) = (((val) >> 3) & 0xf8) | (((val) >> 8) & 0x07);	\
-	(c) = (((val) << 2) & 0xf8) | (((val) >> 3) & 0x07);	\
+	(c) = (((val) << 2) & 0xf8) | (((val) >> 3) & 0x07);
 
-#define EXTRACT_1555_TO_8888(val, a, b, c, d)				\
-	(a) = ((int16_t)(val) >> 15) & 0xff;						\
+#define EXTRACT_1555_TO_8888(val, a, b, c, d) \
+	(a) = ((val) & 0x8000) ? 0xff : 0x00;				\
 	EXTRACT_x555_TO_888(val, b, c, d)						\
 
 #define EXTRACT_5551_TO_8888(val, a, b, c, d)				\
@@ -665,11 +662,7 @@ using rgb_t = uint32_t;
 
 struct rgba
 {
-#ifndef WORDS_BIGENDIAN
 	uint8_t				b, g, r, a;
-#else
-	uint8_t				a, r, g, b;
-#endif
 };
 
 union voodoo_reg
@@ -1134,7 +1127,7 @@ inline int32_t float_to_int32(const uint32_t data, const int fixedbits)
 	// Clamp the exponent to the type's shift limit
 	constexpr auto max_shift = std::numeric_limits<int32_t>::digits;
 	int exponent = ((data >> 23) & 0xff) - 127 - 23 + fixedbits;
-	exponent = std::clamp(exponent, -max_shift, max_shift);
+	exponent = std::clamp(exponent, -max_shift, max_shift); //-V764
 
 	int32_t result = (data & 0x7fffff) | 0x800000;
 
@@ -3011,7 +3004,7 @@ iterated W    = 18.32 [48 bits]
 
 **************************************************************************/
 
-static voodoo_state* v = nullptr;
+static voodoo_state* v = nullptr; //-V707
 static auto vtype = VOODOO_1;
 
 static auto voodoo_bilinear_filtering = false;
@@ -3128,10 +3121,10 @@ static inline void raster_generic(const voodoo_state* vs, uint32_t TMUS, uint32_
 	const int32_t dx = startx - (fbi.ax >> 4);
 	const int32_t dy = y - (fbi.ay >> 4);
 
-	int32_t iterr = fbi.startr + dy * fbi.drdy + dx * fbi.drdx;
-	int32_t iterg = fbi.startg + dy * fbi.dgdy + dx * fbi.dgdx;
-	int32_t iterb = fbi.startb + dy * fbi.dbdy + dx * fbi.dbdx;
-	int32_t itera = fbi.starta + dy * fbi.dady + dx * fbi.dadx;
+	int64_t iterr = fbi.startr + dy * fbi.drdy + dx * fbi.drdx;
+	int64_t iterg = fbi.startg + dy * fbi.dgdy + dx * fbi.dgdx;
+	int64_t iterb = fbi.startb + dy * fbi.dbdy + dx * fbi.dbdx;
+	int64_t itera = fbi.starta + dy * fbi.dady + dx * fbi.dadx;
 	int32_t iterz = fbi.startz + dy * fbi.dzdy + dx * fbi.dzdx;
 	int64_t iterw = fbi.startw + dy * fbi.dwdy + dx * fbi.dwdx;
 	int64_t iterw0 = 0;
@@ -3504,7 +3497,7 @@ static raster_info *add_rasterizer(voodoo_state *vs, const raster_info *cinfo)
 -------------------------------------------------*/
 static raster_info *find_rasterizer(voodoo_state *vs, int texcount)
 {
-	raster_info *info, *prev = NULL;
+	raster_info *info, *prev = nullptr;
 	raster_info curinfo;
 	int hash;
 
@@ -3553,7 +3546,7 @@ static raster_info *find_rasterizer(voodoo_state *vs, int texcount)
 	curinfo.polys = 0;
 	curinfo.hits = 0;
 #endif
-	curinfo.next = 0;
+	curinfo.next = nullptr;
 	curinfo.shader_ready = false;
 
 	return add_rasterizer(vs, &curinfo);
@@ -5826,7 +5819,7 @@ static void register_w(uint32_t offset, uint32_t data)
 			if (vtype < VOODOO_2) {
 				break;
 			}
-			/* else fall through... */
+		        [[fallthrough]];
 
 		/* fbiInitX can only be written if initEnable says we can -- Voodoo/Voodoo2 only */
 		/* most of these affect memory layout, so always recompute that when done */
@@ -6092,8 +6085,8 @@ static void lfb_w(uint32_t offset, uint32_t data, uint32_t mem_mask) {
 			break;
 
 		case 16*0 + 2:		/* ARGB, 16-bit ARGB 1-5-5-5 */
-			EXTRACT_1555_TO_8888(data, sa[0], sr[0], sg[0], sb[0]);
-			EXTRACT_1555_TO_8888(data >> 16, sa[1], sr[1], sg[1], sb[1]);
+		        EXTRACT_1555_TO_8888(data, sa[0], sr[0], sg[0], sb[0]); //-V1037
+		        EXTRACT_1555_TO_8888(data >> 16, sa[1], sr[1], sg[1], sb[1]);
 			mask = LFB_RGB_PRESENT | LFB_ALPHA_PRESENT | ((LFB_RGB_PRESENT | LFB_ALPHA_PRESENT) << 4);
 			offset <<= 1;
 			break;
@@ -6185,8 +6178,8 @@ static void lfb_w(uint32_t offset, uint32_t data, uint32_t mem_mask) {
 			break;
 
 		case 16*0 + 14:		/* ARGB, 32-bit depth+ARGB 1-5-5-5 */
-			sw[0] = data >> 16;
-			EXTRACT_1555_TO_8888(data, sa[0], sr[0], sg[0], sb[0]);
+		        sw[0] = data >> 16; //-V1037
+		        EXTRACT_1555_TO_8888(data, sa[0], sr[0], sg[0], sb[0]);
 			mask = LFB_RGB_PRESENT | LFB_ALPHA_PRESENT | LFB_DEPTH_PRESENT_MSW;
 			break;
 		case 16*1 + 14:		/* ABGR, 32-bit depth+ARGB 1-5-5-5 */
@@ -6830,7 +6823,7 @@ static uint32_t register_r(const uint32_t offset)
 {
 	using namespace bit::literals;
 
-	const auto regnum = static_cast<uint8_t>((offset) & 0xff);
+	const auto regnum = static_cast<uint8_t>(offset & 0xff);
 
 	//LOG(LOG_VOODOO,LOG_WARN)("Voodoo:read chip %x reg %x (%s)", chips, regnum<<2, voodoo_reg_name[regnum]);
 
@@ -7064,7 +7057,9 @@ static int get_num_total_threads()
 	constexpr auto SettingName = "voodoo_threads";
 	constexpr auto AutoSetting = "auto";
 
-	const auto sec = dynamic_cast<SectionProp*>(control->GetSection(SectionName));
+	const auto sec = get_section(SectionName);
+	assert(sec);
+
 	const auto user_setting = sec ? sec->GetString(SettingName) : AutoSetting;
 
 	if (const auto maybe_int = parse_int(user_setting)) {
@@ -7092,7 +7087,7 @@ static int get_num_total_threads()
 		set_section_property_value(SectionName, SettingName, AutoSetting);
 	}
 
-	return std::clamp(SDL_GetCPUCount(), MinThreads, MaxAutoThreads);
+	return std::clamp(SDL_GetNumLogicalCPUCores(), MinThreads, MaxAutoThreads);
 }
 
 /***************************************************************************
@@ -7102,7 +7097,8 @@ static int get_num_total_threads()
 /*-------------------------------------------------
     device start callback
 -------------------------------------------------*/
-static void voodoo_init() {
+static void initialise_voodoo()
+{
 	assert(!v);
 
 	// Deduct 1 because the main thread is always present
@@ -7499,8 +7495,7 @@ static void Voodoo_UpdateScreen()
 			const auto frames_per_second = static_cast<float>(
 			        1000.0 / v->draw.frame_period_ms);
 
-			constexpr auto reinit_render = false;
-			RENDER_MaybeAutoSwitchShader(GFX_GetCanvasSizeInPixels(), video_mode, reinit_render);
+			RENDER_NotifyVideoModeChanged(video_mode);
 
 			RENDER_SetSize(image_info, frames_per_second);
 		}
@@ -7863,7 +7858,7 @@ static void Voodoo_Startup() {
 		return;
 	}
 
-	voodoo_init();
+	initialise_voodoo();
 
 	v->draw = {};
 
@@ -7878,14 +7873,9 @@ PageHandler* VOODOO_PCI_GetLFBPageHandler(Bitu page) {
 	return (page >= (voodoo_current_lfb>>12) && page < (voodoo_current_lfb>>12) + VOODOO_PAGES ? voodoo_pagehandler : nullptr);
 }
 
-
-static void voodoo_destroy(Section* /*sec*/) {
-	voodoo_shutdown();
-}
-
-static void voodoo_init(Section* sec)
+void VOODOO_Init()
 {
-	auto* section = dynamic_cast<SectionProp*>(sec);
+	auto section = get_section("voodoo");
 
 	// Only activate on SVGA machines and when requested
 	if (!is_machine_svga() || !section || !section->GetBool("voodoo")) {
@@ -7896,8 +7886,6 @@ static void voodoo_init(Section* sec)
 	vtype = (memsize_pref == "4" ? VOODOO_1 : VOODOO_1_DTMU);
 
 	voodoo_bilinear_filtering = section->GetBool("voodoo_bilinear_filtering");
-
-	sec->AddDestroyFunction(&voodoo_destroy, false);
 
 	// Check 64 KB alignment of LFB base
 	static_assert((PciVoodooLfbBase & 0xffff) == 0);
@@ -7917,13 +7905,18 @@ static void voodoo_init(Section* sec)
 	        (voodoo_bilinear_filtering ? "" : "no "));
 }
 
-static void init_voodoo_dosbox_settings(SectionProp& secprop)
+void VOODOO_Destroy()
+{
+	voodoo_shutdown();
+}
+
+static void init_voodoo_config_settings(SectionProp& section)
 {
 	constexpr auto Deprecated  = Property::Changeable::Deprecated;
 	constexpr auto OnlyAtStart = Property::Changeable::OnlyAtStart;
 	constexpr auto WhenIdle    = Property::Changeable::WhenIdle;
 
-	auto* bool_prop = secprop.AddBool("voodoo", WhenIdle, true);
+	auto* bool_prop = section.AddBool("voodoo", WhenIdle, true);
 	bool_prop->SetHelp(
 	        "Enable 3dfx Voodoo emulation ('on' by default). This is authentic low-level\n"
 	        "emulation of the Voodoo card without any OpenGL passthrough, so it requires a\n"
@@ -7933,30 +7926,35 @@ static void init_voodoo_dosbox_settings(SectionProp& secprop)
 	        "A small number of games integrate the Glide driver into their code, so they\n"
 	        "don't need 'GLIDE2X.OVL'.");
 
-	auto* str_prop = secprop.AddString("voodoo_memsize", OnlyAtStart, "4");
+	auto* str_prop = section.AddString("voodoo_memsize", OnlyAtStart, "4");
 	str_prop->SetValues({"4", "12"});
 	str_prop->SetHelp(
-	        "Set the amount of video memory for 3dfx Voodoo graphics. The memory is used by\n"
-	        "the Frame Buffer Interface (FBI) and Texture Mapping Unit (TMU) as follows:\n"
+	        "Set the amount of video memory for 3dfx Voodoo graphics (4 by default). The\n"
+	        "memory is used by the Frame Buffer Interface (FBI) and Texture Mapping Unit\n"
+	        "(TMU). Possible values:\n"
+	        "\n"
 	        "   4: 2 MB for the FBI and one TMU with 2 MB (default).\n"
 	        "  12: 4 MB for the FBI and two TMUs, each with 4 MB.");
 
 	// Deprecate the boolean Voodoo multithreading setting
-	bool_prop = secprop.AddBool("voodoo_multithreading", Deprecated, false);
-	bool_prop->SetHelp("Renamed to 'voodoo_threads'");
+	bool_prop = section.AddBool("voodoo_multithreading", Deprecated, false);
+	bool_prop->SetHelp("Renamed to [color=light-green]'voodoo_threads'.[reset]");
 
-	str_prop = secprop.AddString("voodoo_threads", OnlyAtStart, "auto");
+	str_prop = section.AddString("voodoo_threads", OnlyAtStart, "auto");
 	str_prop->SetHelp(
-	        "Use threads to improve 3dfx Voodoo performance:\n"
-	        "  auto:     Use up to 16 threads based on available CPU cores (default).\n"
-	        "  <value>:  Set a specific number of threads between 1 and 128.\n"
+	        "Use threads to improve 3dfx Voodoo performance ('auto' by default). Possible\n"
+	        "values:\n"
+	        "\n"
+	        "  auto:      Use up to 16 threads based on available CPU cores (default).\n"
+	        "  <number>:  Set a specific number of threads between 1 and 128.\n"
+	        "\n"
 	        "Note: Setting this to a higher value than the number of logical CPUs your\n"
 	        "      hardware supports is very likely to harm performance. This has been\n"
 	        "      measured to scale well up to 8-16 threads, but it has not been tested\n"
 	        "      on a many-core CPU. If you have a Threadripper or similar CPU, please\n"
 	        "      let us know how it goes.");
 
-	bool_prop = secprop.AddBool("voodoo_bilinear_filtering", OnlyAtStart, true);
+	bool_prop = section.AddBool("voodoo_bilinear_filtering", OnlyAtStart, true);
 	bool_prop->SetHelp(
 	        "Use bilinear filtering to emulate the 3dfx Voodoo's texture smoothing effect\n"
 	        "('on' by default). Bilinear filtering can impact frame rates on slower systems;\n"
@@ -7967,8 +7965,8 @@ void VOODOO_AddConfigSection(const ConfigPtr& conf)
 {
 	assert(conf);
 
-	SectionProp* sec = conf->AddSectionProp("voodoo", &voodoo_init);
-	assert(sec);
-	init_voodoo_dosbox_settings(*sec);
+	auto section = conf->AddSection("voodoo");
+
+	init_voodoo_config_settings(*section);
 }
 

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText:  2021-2025 The DOSBox Staging Team
+// SPDX-FileCopyrightText:  2021-2026 The DOSBox Staging Team
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include "utils/rwqueue.h"
@@ -172,10 +172,9 @@ size_t RWQueue<T>::BulkEnqueue(std::vector<T>& from_source, const size_t num_req
 		if (is_running) {
 			const auto source_end = source_start +
 			                        static_cast<difference_t>(num_items);
-			queue.insert(queue.end(),
-			             std::move_iterator(source_start),
-			             std::move_iterator(source_end));
-
+			for (auto it = source_start; it != source_end; ++it) {
+				queue.emplace_back(std::move(*it));
+			}
 			// notify the first waiting thread that we have an item
 			lock.unlock();
 			has_items.notify_one();
@@ -219,7 +218,9 @@ size_t RWQueue<T>::NonblockingBulkEnqueue(std::vector<T>& from_source,
 	const auto source_start = from_source.begin();
 	const auto source_end = from_source.begin() + num_items;
 
-	queue.insert(queue.end(), std::move_iterator(source_start), std::move_iterator(source_end));
+	for (auto it = source_start; it != source_end; ++it) {
+		queue.emplace_back(std::move(*it));
+	}
 	from_source.erase(source_start, source_end);
 	lock.unlock();
 	has_items.notify_one();
@@ -320,7 +321,7 @@ template class RWQueue<AudioFrame>;
 #include "midi/midi.h"
 template class RWQueue<MidiWork>;
 
-#include "gui/render.h"
+#include "gui/render/render.h"
 template class RWQueue<SaveImageTask>;
 
 //PC Speaker

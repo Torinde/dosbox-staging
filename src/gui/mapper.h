@@ -10,7 +10,7 @@
 #include <string>
 #include <vector>
 
-#include <SDL.h>
+#include <SDL3/SDL.h>
 
 #define MAPPERFILE "mapper-sdl2-" DOSBOX_VERSION ".map"
 
@@ -54,15 +54,27 @@ void MAPPER_AddHandler(MAPPER_Handler *handler,
                        const char *button_name);
 
 void MAPPER_BindKeys(Section *sec);
-void MAPPER_StartUp(Section *sec);
 void MAPPER_Run(bool pressed);
+
+// Open the mapper UI if a previous MAPPER_Run latched a request. Drained
+// from normal_loop's idle branch and from paused_tick so the mapper hotkey
+// works during pause (the prior PIC_AddEvent deferral didn't fire then).
+void MAPPER_RunPending();
+
 void MAPPER_DisplayUI();
 void MAPPER_LosingFocus();
+
 bool MAPPER_IsUsingJoysticks();
-std::vector<std::string> MAPPER_GetEventNames(const std::string &prefix);
+void MAPPER_UpdateJoysticks();
+
+void MAPPER_Destroy();
+
+std::vector<std::string> MAPPER_GetEventNames(const std::string& prefix);
+
 void MAPPER_AutoType(std::vector<std::string> &sequence,
                      const uint32_t wait_ms,
                      const uint32_t pacing_ms);
+
 void MAPPER_CheckEvent(SDL_Event *event);
 
 // Screen fits ~89 characters total without clipping. Allocate a few more bytes
@@ -75,11 +87,18 @@ constexpr int MaxBindNameLength = 100;
  * the mapper UI buttons to reflect joystick binds being added / removed.
  *
  * @param event A pointer to an SDL_JoyDeviceEvent whose type must be one of:
- * - SDL_CONTROLLERDEVICEADDED
- * - SDL_CONTROLLERDEVICEREMOVED
- * - SDL_JOYDEVICEADDED
- * - SDL_JOYDEVICEREMOVED
+ * - SDL_EVENT_GAMEPAD_ADDED
+ * - SDL_EVENT_GAMEPAD_REMOVED
+ * - SDL_EVENT_JOYSTICK_ADDED
+ * - SDL_EVENT_JOYSTICK_REMOVED
  */
 void MAPPER_HandleJoyDeviceEvent(SDL_JoyDeviceEvent* event);
 
-#endif
+struct KeyPressState {
+	SDL_Keycode key = SDLK_UNKNOWN;
+	SDL_Keymod mod  = SDL_KMOD_NONE;
+};
+
+KeyPressState MAPPER_GetLastKeyPressed();
+
+#endif // DOSBOX_MAPPER_H

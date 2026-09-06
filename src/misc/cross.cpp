@@ -1,8 +1,9 @@
-// SPDX-FileCopyrightText:  2021-2025 The DOSBox Staging Team
+// SPDX-FileCopyrightText:  2021-2026 The DOSBox Staging Team
 // SPDX-FileCopyrightText:  2002-2021 The DOSBox Team
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include "misc/cross.h"
+#include "utils/env_utils.h"
 
 #include <cerrno>
 #include <climits>
@@ -13,7 +14,7 @@
 #include <unistd.h>
 #include <vector>
 
-#if C_COREFOUNDATION
+#if defined(MACOSX)
 #	include <CoreFoundation/CoreFoundation.h>
 #endif
 
@@ -33,23 +34,19 @@
 #	endif
 #endif
 
-#if defined(HAVE_PWD_H)
-#	include <pwd.h>
-#endif
-
 #include "utils/fs_utils.h"
 #include "utils/string_utils.h"
 #include "misc/support.h"
 #include "dos/drives.h"
 
-std::string GetPrimaryConfigName()
+std::string get_primary_config_name()
 {
 	return DOSBOX_PROJECT_NAME ".conf";
 }
 
-std_fs::path GetPrimaryConfigPath()
+std_fs::path get_primary_config_path()
 {
-	return GetConfigDir() / GetPrimaryConfigName();
+	return get_config_dir() / get_primary_config_name();
 }
 
 #if defined(MACOSX)
@@ -58,13 +55,9 @@ static std_fs::path get_or_create_config_dir()
 {
 	const auto conf_path = resolve_home("~/Library/Preferences/DOSBox");
 
-	constexpr auto success = 0;
-	if (create_dir(conf_path, 0700, OK_IF_EXISTS) == success) {
-
-	} else {
-		LOG_ERR("CONFIG: Can't create config directory '%s': %s",
-		        conf_path.string().c_str(),
-		        safe_strerror(errno).c_str());
+	if (!create_dir_if_not_exist(conf_path)) {
+		LOG_ERR("CONFIG: Can't create config directory '%s'",
+		        conf_path.string().c_str());
 	}
 	return conf_path;
 }
@@ -99,11 +92,9 @@ static std_fs::path get_or_create_config_dir()
 
 	const auto conf_path = std_fs::path(appdata_path) / "DOSBox";
 
-	constexpr auto success_result = 0;
-	if (create_dir(conf_path, 0700, OK_IF_EXISTS) != success_result) {
-		LOG_ERR("CONFIG: Can't create config directory '%s': %s",
-		        conf_path.string().c_str(),
-		        safe_strerror(errno).c_str());
+	if (!create_dir_if_not_exist(conf_path)) {
+		LOG_ERR("CONFIG: Can't create config directory '%s'",
+		        conf_path.string().c_str());
 	}
 
 	return conf_path;
@@ -119,13 +110,13 @@ static std_fs::path get_or_create_config_dir()
 	const auto conf_path = get_xdg_config_home() / "dosbox";
 	std::error_code ec   = {};
 
-	if (std_fs::exists(conf_path / GetPrimaryConfigName())) {
+	if (std_fs::exists(conf_path / get_primary_config_name())) {
 		return conf_path;
 	}
 
 	auto fallback_to_deprecated = []() {
 		const auto old_conf_path = resolve_home("~/.dosbox");
-		if (path_exists(old_conf_path / GetPrimaryConfigName())) {
+		if (path_exists(old_conf_path / get_primary_config_name())) {
 			LOG_WARNING("CONFIG: Falling back to deprecated path (~/.dosbox) due to errors");
 			LOG_WARNING("CONFIG: Please investigate the problems and try again");
 		}
@@ -183,12 +174,12 @@ static std_fs::path get_or_create_config_dir()
 
 static std_fs::path cached_config_dir = {};
 
-void InitConfigDir()
+void init_config_dir()
 {
 	if (cached_config_dir.empty()) {
 		// Check if a portable layout exists
 		const auto portable_conf_path = get_executable_path() /
-		                                GetPrimaryConfigName();
+		                                get_primary_config_name();
 
 		std::error_code ec = {};
 		if (std_fs::is_regular_file(portable_conf_path, ec)) {
@@ -204,7 +195,7 @@ void InitConfigDir()
 	}
 }
 
-std_fs::path GetConfigDir()
+std_fs::path get_config_dir()
 {
 	assert(!cached_config_dir.empty());
 	return cached_config_dir;
@@ -217,30 +208,21 @@ std_fs::path resolve_home(const std::string &str) noexcept
 
 	std::string temp_line = str;
 	if(temp_line.size() == 1 || temp_line[1] == CROSS_FILESPLIT) { //The ~ and ~/ variant
-		char * home = getenv("HOME");
-		if(home) temp_line.replace(0,1,std::string(home));
-
-#if defined(HAVE_SYS_TYPES_H) && defined(HAVE_PWD_H)
-	} else { // The ~username variant
-		std::string::size_type namelen = temp_line.find(CROSS_FILESPLIT);
-		if(namelen == std::string::npos) namelen = temp_line.size();
-		std::string username = temp_line.substr(1,namelen - 1);
-		struct passwd* pass = getpwnam(username.c_str());
-		if(pass) temp_line.replace(0,namelen,pass->pw_dir); //namelen -1 +1(for the ~)
-#endif // USERNAME lookup code
+		auto home = get_env_var("HOME");
+		if(!home.empty()) temp_line.replace(0, 1, home);
 	}
 	return temp_line;
 }
 
 #if defined(WIN32)
 
-dir_information* open_directory(const char* dirname) {
+DirInformation* open_directory(const char* dirname) {
 	if (dirname == nullptr) return nullptr;
 
 	size_t len = strlen(dirname);
 	if (len == 0) return nullptr;
 
-	static dir_information dir;
+	static DirInformation dir;
 
 	safe_strncpy(dir.base_path,dirname,MAX_PATH);
 
@@ -251,17 +233,31 @@ dir_information* open_directory(const char* dirname) {
 
 	dir.handle = INVALID_HANDLE_VALUE;
 
-	return (path_exists(dirname) ? &dir : nullptr);
+	return (local_drive_path_exists(dirname) ? &dir : nullptr);
 }
 
-bool read_directory_first(dir_information* dirp, char* entry_name, bool& is_directory) {
+bool read_directory_first(DirInformation* dirp, char* entry_name, bool& is_directory) {
 	if (!dirp) return false;
-	dirp->handle = FindFirstFile(dirp->base_path, &dirp->search_data);
+
+	wchar_t wide_path[sizeof(dirp->base_path)] = {};
+	if (!windows_utf8_to_utf16(dirp->base_path, wide_path)) {
+		return false;
+	}
+
+	dirp->handle = FindFirstFileW(wide_path, &dirp->search_data);
 	if (INVALID_HANDLE_VALUE == dirp->handle) {
 		return false;
 	}
 
-	safe_strncpy(entry_name,dirp->search_data.cFileName,(MAX_PATH<CROSS_LEN)?MAX_PATH:CROSS_LEN);
+	// Edge case: This does not correctly handle filenames on the host that are invaid UTF-16.
+	// Windows does not enforce UTF-16 and can have filenames containing unpaired surrogates.
+	// The below function uses WideCharToMultiByte which replaces invalid code-points with the replacement character U+FFFD
+	// In order to properly handle this, we would need to write our own convertion to WTF-8 which can encode this.
+	// https://wtf-8.codeberg.page/
+	// Probably this is good enough for our use-case though. Such filenames would not display correctly in DOS anyway.
+	if (!windows_utf16_to_utf8(dirp->search_data.cFileName, entry_name, (MAX_PATH<CROSS_LEN)?MAX_PATH:CROSS_LEN)) {
+		return false;
+	}
 
 	if (dirp->search_data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) is_directory = true;
 	else is_directory = false;
@@ -269,12 +265,14 @@ bool read_directory_first(dir_information* dirp, char* entry_name, bool& is_dire
 	return true;
 }
 
-bool read_directory_next(dir_information* dirp, char* entry_name, bool& is_directory) {
+bool read_directory_next(DirInformation* dirp, char* entry_name, bool& is_directory) {
 	if (!dirp) return false;
-	int result = FindNextFile(dirp->handle, &dirp->search_data);
+	int result = FindNextFileW(dirp->handle, &dirp->search_data);
 	if (result==0) return false;
 
-	safe_strncpy(entry_name,dirp->search_data.cFileName,(MAX_PATH<CROSS_LEN)?MAX_PATH:CROSS_LEN);
+	if (!windows_utf16_to_utf8(dirp->search_data.cFileName, entry_name, (MAX_PATH<CROSS_LEN)?MAX_PATH:CROSS_LEN)) {
+		return false;
+	}
 
 	if (dirp->search_data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) is_directory = true;
 	else is_directory = false;
@@ -282,7 +280,7 @@ bool read_directory_next(dir_information* dirp, char* entry_name, bool& is_direc
 	return true;
 }
 
-void close_directory(dir_information* dirp) {
+void close_directory(DirInformation* dirp) {
 	if (dirp && dirp->handle != INVALID_HANDLE_VALUE) {
 		FindClose(dirp->handle);
 		dirp->handle = INVALID_HANDLE_VALUE;
@@ -291,19 +289,19 @@ void close_directory(dir_information* dirp) {
 
 #else
 
-dir_information* open_directory(const char* dirname) {
-	static dir_information dir;
+DirInformation* open_directory(const char* dirname) {
+	static DirInformation dir;
 	dir.dir=opendir(dirname);
 	safe_strcpy(dir.base_path, dirname);
 	return dir.dir?&dir:nullptr;
 }
 
-bool read_directory_first(dir_information* dirp, char* entry_name, bool& is_directory) {
+bool read_directory_first(DirInformation* dirp, char* entry_name, bool& is_directory) {
 	if (!dirp) return false;
 	return read_directory_next(dirp,entry_name,is_directory);
 }
 
-bool read_directory_next(dir_information* dirp, char* entry_name, bool& is_directory) {
+bool read_directory_next(DirInformation* dirp, char* entry_name, bool& is_directory) {
 	if (!dirp) return false;
 	struct dirent* dentry = readdir(dirp->dir);
 	if (dentry==nullptr) {
@@ -345,7 +343,7 @@ bool read_directory_next(dir_information* dirp, char* entry_name, bool& is_direc
 	return true;
 }
 
-void close_directory(dir_information* dirp) {
+void close_directory(DirInformation* dirp) {
 	if (dirp) closedir(dirp->dir);
 }
 
@@ -423,7 +421,7 @@ static bool wildcard_matches_hidden_file(const std::string_view filename,
 	return is_wildcard_first && is_hidden_file;
 }
 
-bool WildFileCmp(const char* file, const char* wild, bool long_compare)
+bool wild_file_cmp(const char* file, const char* wild, bool long_compare)
 {
 	if (!file || !wild || (*file && !*wild) || strlen(wild) > LFN_NAMELENGTH)
 		return false;
@@ -576,9 +574,9 @@ bool get_expanded_files(const std::string &path,
 		const auto filename = entry.path().filename();
 
 		constexpr auto long_compare = true;
-		if (WildFileCmp(filename.string().c_str(),
-		                p.filename().string().c_str(),
-		                long_compare)) {
+		if (wild_file_cmp(filename.string().c_str(),
+		                  p.filename().string().c_str(),
+		                  long_compare)) {
 			files.emplace_back((dir / filename).string());
 		}
 	}
@@ -592,7 +590,7 @@ bool get_expanded_files(const std::string &path,
 	}
 }
 
-#if C_COREFOUNDATION
+#if defined(MACOSX)
 std::string cfstr_to_string(CFStringRef source)
 {
 	if (!source)
@@ -631,14 +629,16 @@ std::string cfstr_to_string(CFStringRef source)
 // Local time support
 // ***************************************************************************
 
+#if defined(WIN32)
+
 namespace cross {
 
-#if defined(WIN32)
 struct tm *localtime_r(const time_t *timep, struct tm *result)
 {
 	const errno_t err = localtime_s(result, timep);
 	return (err == 0 ? result : nullptr);
 }
-#endif
 
 } // namespace cross
+
+#endif

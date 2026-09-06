@@ -1,9 +1,11 @@
+// SPDX-FileCopyrightText:  2025-2026 The DOSBox Staging Team
 // SPDX-FileCopyrightText:  2002-2021 The DOSBox Team
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include "pic.h"
 
-#include "config/setup.h"
+#include <memory>
+
 #include "cpu/callback.h"
 #include "cpu/cpu.h"
 #include "hardware/pic.h"
@@ -129,9 +131,9 @@ void PIC_Controller::set_imr(uint8_t val)
 	if (is_machine_pcjr()) {
 		//irq 6 is a NMI on the PCJR
 		if (this == &primary_controller)
-			val &= ~(1 << (6));
+			val &= ~(1 << 6);
 	}
-	uint8_t change = (imr) ^ (val); //Bits that have changed become 1.
+	uint8_t change = imr ^ val; //Bits that have changed become 1.
 	imr  =  val;
 	imrr = ~val;
 
@@ -167,10 +169,10 @@ void PIC_Controller::deactivate() {
 }
 
 void PIC_Controller::start_irq(uint8_t val) {
-	irr &= ~(1<<(val));
+	irr &= ~(1 << val);
 	if (!auto_eoi) {
 		active_irq = val;
-		isr |= 1<<(val);
+		isr |= 1 << val;
 		isrr = ~isr;
 	} else if (rotate_on_auto_eoi) {
 		LOG_ERR("PIC: Rotate on auto EOI not handled");
@@ -231,7 +233,7 @@ static void write_command(io_port_t port, io_val_t value, io_width_t)
 				LOG_ERR("PIC: Rotate mode not supported");
 			}
 			if (val & 0x40) { // specific EOI
-				pic->isr &= ~(1 << ((val - 0x60)));
+				pic->isr &= ~(1 << (val - 0x60));
 				pic->isrr = ~pic->isr;
 				pic->check_after_EOI();
 //				if (val&0x80);	// perform rotation
@@ -596,7 +598,7 @@ void TIMER_DelTickHandler(TIMER_TickHandler handler) {
 }
 
 void TIMER_AddTickHandler(TIMER_TickHandler handler) {
-	TickerBlock * newticker=new TickerBlock;
+	auto newticker=new TickerBlock;
 	newticker->next=firstticker;
 	newticker->handler=handler;
 	firstticker=newticker;
@@ -623,12 +625,13 @@ void TIMER_AddTick(void) {
 }
 
 /* Use full name to avoid name clash with compile option for position-independent code */
-class PIC_8259A final : public ModuleBase {
+class PIC_8259A {
 private:
 	IO_ReadHandleObject ReadHandler[4];
 	IO_WriteHandleObject WriteHandler[4];
 public:
-	PIC_8259A(Section* configuration):ModuleBase(configuration){
+	PIC_8259A()
+	{
 		/* Setup pic0 and pic1 with initial values like DOS has normally */
 		PIC_IRQCheck = 0;
 		PIC_Ticks = 0;
@@ -683,17 +686,17 @@ public:
 		pic_queue.next_entry=nullptr;
 	}
 
-	~PIC_8259A(){
-	}
+	~PIC_8259A() = default;
 };
 
-static PIC_8259A* test;
+static std::unique_ptr<PIC_8259A> pic = {};
 
-void PIC_Destroy(Section* /*sec*/){
-	delete test;
+void PIC_Init()
+{
+	pic = std::make_unique<PIC_8259A>();
 }
 
-void PIC_Init(Section* sec) {
-	test = new PIC_8259A(sec);
-	sec->AddDestroyFunction(&PIC_Destroy);
+void PIC_Destroy()
+{
+	pic = {};
 }

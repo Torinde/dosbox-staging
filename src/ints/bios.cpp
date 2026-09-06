@@ -1,29 +1,31 @@
-// SPDX-FileCopyrightText:  2022-2025 The DOSBox Staging Team
+// SPDX-FileCopyrightText:  2022-2026 The DOSBox Staging Team
 // SPDX-FileCopyrightText:  2002-2021 The DOSBox Team
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include "ints/bios.h"
 
-#include "utils/bitops.h"
-#include "cpu/callback.h"
-#include "config/config.h"
-#include "cpu/cpu.h"
-#include "dos/dos_memory.h"
-#include "dosbox.h"
-#include "hardware/hardware.h"
-#include "hardware/joystick.h"
-#include "hardware/pic.h"
-#include "hardware/serialport/serialport.h"
-#include "hardware/port.h"
-#include "int10.h"
-#include "utils/math_utils.h"
-#include "hardware/memory.h"
-#include "hardware/input/mouse.h"
-#include "cpu/registers.h"
-#include "config/setup.h"
-
 #include <ctime>
 #include <memory>
+
+#include "config/config.h"
+#include "config/setup.h"
+#include "cpu/callback.h"
+#include "cpu/cpu.h"
+#include "cpu/registers.h"
+#include "dos/dos_memory.h"
+#include "dosbox.h"
+#include "hardware/audio/ps1audio.h"
+#include "hardware/audio/soundblaster.h"
+#include "hardware/audio/tandy_sound.h"
+#include "hardware/input/joystick.h"
+#include "hardware/input/mouse.h"
+#include "hardware/memory.h"
+#include "hardware/pic.h"
+#include "hardware/port.h"
+#include "hardware/serialport/serialport.h"
+#include "int10.h"
+#include "utils/bitops.h"
+#include "utils/math_utils.h"
 
 // Constants
 constexpr uint32_t BiosMachineSignatureAddress = 0xfffff;
@@ -91,7 +93,7 @@ static bool Tandy_InitializeSB() {
 	uint16_t sbport;
 	uint8_t sbirq;
 	uint8_t sbdma;
-	if (SB_GetAddress(sbport, sbirq, sbdma)) {
+	if (SBLASTER_GetAddress(sbport, sbirq, sbdma)) {
 		tandy_sb.port = sbport;
 		tandy_sb.irq = sbirq;
 		tandy_sb.dma = sbdma;
@@ -177,7 +179,7 @@ static void Tandy_SetupTransfer(PhysPt bufpt,bool isplayback) {
 	if (isplayback) IO_Write(0x0b,0x48|tandy_dma);
 	else IO_Write(0x0b,0x44|tandy_dma);
 	/* set physical address of buffer */
-	uint8_t bufpage=(uint8_t)((bufpt>>16)&0xff);
+	auto bufpage=(uint8_t)((bufpt>>16)&0xff);
 	IO_Write(tandy_dma*2,(uint8_t)(bufpt&0xff));
 	IO_Write(tandy_dma*2,(uint8_t)((bufpt>>8)&0xff));
 	switch (tandy_dma) {
@@ -198,8 +200,8 @@ static void Tandy_SetupTransfer(PhysPt bufpt,bool isplayback) {
 	IO_Write(tandy_dma*2+1,(uint8_t)(tlength&0xff));
 	IO_Write(tandy_dma*2+1,(uint8_t)((tlength>>8)&0xff));
 
-	uint16_t delay=(uint16_t)(real_readw(0x40,0xd2)&0xfff);
-	uint8_t amplitude=(uint8_t)((real_readw(0x40,0xd2)>>13)&0x7);
+	auto delay=(uint16_t)(real_readw(0x40,0xd2)&0xfff);
+	auto amplitude=(uint8_t)((real_readw(0x40,0xd2)>>13)&0x7);
 	if (tandy_sb.port) {
 		IO_Write(0x0a,tandy_dma);	/* enable DMA channel */
 		/* set frequency */
@@ -419,7 +421,7 @@ static void BIOS_HostTimeSync() {
 	dos.date.month=(uint8_t)loctime->tm_mon+1;
 	dos.date.year=(uint16_t)loctime->tm_year+1900;
 
-	uint32_t ticks=(uint32_t)(((double)(
+	auto ticks=(uint32_t)(((double)(
 		loctime->tm_hour*3600*1000+
 		loctime->tm_min*60*1000+
 		loctime->tm_sec*1000+
@@ -500,11 +502,14 @@ static Bitu INT17_Handler(void) {
 static bool INT14_Wait(uint16_t port, uint8_t mask, uint8_t timeout, uint8_t* retval) {
 	const auto starttime = PIC_FullIndex();
 	const auto timeout_f = timeout * 1000.0;
+
 	while (((*retval = IO_ReadB(port)) & mask) != mask) {
 		if (starttime < (PIC_FullIndex() - timeout_f)) {
 			return false;
 		}
-		CALLBACK_Idle();
+		if (CALLBACK_Idle()) {
+			break;
+		}
 	}
 	return true;
 }
@@ -758,39 +763,49 @@ static Bitu INT15_Handler(void) {
 			LOG(LOG_BIOS,LOG_ERROR)("INT15:84:Unknown Bios Joystick functionality.");
 		}
 		break;
-	case 0x86:	/* BIOS - WAIT (AT,PS) */
-		{
-			if (mem_readb(BIOS_WAIT_FLAG_ACTIVE)) {
-				reg_ah=0x83;
-				CALLBACK_SCF(true);
-				break;
-			}
-			uint32_t count=(reg_cx<<16)|reg_dx;
-		        const auto timeout = PIC_FullIndex() +
-		                             static_cast<double>(count) / 1000.0 + 1.0;
-		        mem_writed(BIOS_WAIT_FLAG_POINTER, RealMake(0, BIOS_WAIT_FLAG_TEMP));
-		        mem_writed(BIOS_WAIT_FLAG_COUNT, count);
-		        mem_writeb(BIOS_WAIT_FLAG_ACTIVE, 1);
-		        /* Unmask IRQ 8 if masked */
-		        uint8_t mask = IO_Read(0xa1);
-		        if (mask & 1)
-			        IO_Write(0xa1, mask & ~1);
-		        /* Reprogram RTC to start */
-			IO_Write(0x70,0xb);
-			IO_Write(0x71,IO_Read(0x71)|0x40);
-			while (mem_readd(BIOS_WAIT_FLAG_COUNT)) {
-				if (PIC_FullIndex()>timeout) {
-					/* RTC timer not working for some reason */
-					mem_writeb(BIOS_WAIT_FLAG_ACTIVE,0);
-					IO_Write(0x70,0xb);
-					IO_Write(0x71,IO_Read(0x71)&~0x40);
-					break;
-				}
-				CALLBACK_Idle();
-			}
-			CALLBACK_SCF(false);
+
+	case 0x86: /* BIOS - WAIT (AT,PS) */
+	{
+		if (mem_readb(BIOS_WAIT_FLAG_ACTIVE)) {
+			reg_ah = 0x83;
+			CALLBACK_SCF(true);
 			break;
 		}
+		uint32_t count = (reg_cx << 16) | reg_dx;
+
+		const auto timeout = PIC_FullIndex() +
+		                     static_cast<double>(count) / 1000.0 + 1.0;
+
+		mem_writed(BIOS_WAIT_FLAG_POINTER, RealMake(0, BIOS_WAIT_FLAG_TEMP));
+		mem_writed(BIOS_WAIT_FLAG_COUNT, count);
+		mem_writeb(BIOS_WAIT_FLAG_ACTIVE, 1);
+
+		// Unmask IRQ 8 if masked
+		uint8_t mask = IO_Read(0xa1);
+		if (mask & 1) {
+			IO_Write(0xa1, mask & ~1);
+		}
+
+		// Reprogram RTC to start
+		IO_Write(0x70, 0xb);
+		IO_Write(0x71, IO_Read(0x71) | 0x40);
+
+		while (mem_readd(BIOS_WAIT_FLAG_COUNT)) {
+			if (PIC_FullIndex() > timeout) {
+				// RTC timer not working for some reason
+				mem_writeb(BIOS_WAIT_FLAG_ACTIVE, 0);
+				IO_Write(0x70, 0xb);
+				IO_Write(0x71, IO_Read(0x71) & ~0x40);
+				break;
+			}
+			if (CALLBACK_Idle()) {
+				break;
+			}
+		}
+		CALLBACK_SCF(false);
+		break;
+	}
+
 	case 0x87:	/* Copy extended memory */
 		{
 			bool enabled = MEM_A20_Enabled();
@@ -829,9 +844,7 @@ static Bitu INT15_Handler(void) {
 		}
 		break;
 	case 0x90:	/* OS HOOK - DEVICE BUSY */
-		CALLBACK_SCF(false);
-		reg_ah=0;
-		break;
+		[[fallthrough]];
 	case 0x91:	/* OS HOOK - DEVICE POST */
 		CALLBACK_SCF(false);
 		reg_ah=0;
@@ -1022,10 +1035,13 @@ static Bitu reboot_handler()
 
 	// Prepare the text to display
 	std::vector<std::string> conunter_text = {};
-	conunter_text.push_back(MSG_Get("BIOS_REBOOTING_1"));
-	conunter_text.push_back(MSG_Get("BIOS_REBOOTING_2"));
-	conunter_text.push_back(MSG_Get("BIOS_REBOOTING_3"));
+
+	conunter_text.emplace_back(MSG_Get("BIOS_REBOOTING_1"));
+	conunter_text.emplace_back(MSG_Get("BIOS_REBOOTING_2"));
+	conunter_text.emplace_back(MSG_Get("BIOS_REBOOTING_3"));
+
 	size_t max_length = 0;
+
 	for (auto& entry : conunter_text) {
 		max_length = std::max(max_length, entry.length());
 	}
@@ -1060,10 +1076,9 @@ static Bitu reboot_handler()
 		constexpr auto delay_ms = 1000.0;
 		const auto start = PIC_FullIndex();
 		while ((PIC_FullIndex() - start) < delay_ms) {
-			CALLBACK_Idle();
 			// Bail out if the user closes the window.
 			// Otherwise we get stuck in an infinite loop.
-			if (shutdown_requested) {
+			if (CALLBACK_Idle()) {
 				return CBRET_NONE;
 			}
 		}
@@ -1226,12 +1241,12 @@ bool BIOS_ConfigureTandyDacCallbacks(const std::optional<bool> maybe_request_dac
 void BIOS_SetupKeyboard(void);
 void BIOS_SetupDisks(void);
 
-class BIOS final : public ModuleBase{
+class BIOS final {
 private:
 	CALLBACK_HandlerObject callback[11];
 	void AddMessages();
 public:
-	BIOS(Section* configuration) : ModuleBase(configuration)
+	BIOS()
 	{
 		AddMessages();
 
@@ -1269,9 +1284,11 @@ public:
 			   at the end of the conventional 640k) */
 			mem_writew(BIOS_MEMORY_SIZE, 624);
 			mem_writew(BIOS_TRUE_MEMORY_SIZE, ConventionalMemorySizeKb);
+
 		} else if (is_machine_pcjr()) {
-			const SectionProp* section = static_cast<SectionProp*>(control->GetSection("dos"));
+			const auto section = get_section("dos");
 			assert(section);
+
 			const std::string pcjr_memory_config = section->GetString("pcjr_memory_config");
 			if (pcjr_memory_config == "expanded") {
 				mem_writew(BIOS_MEMORY_SIZE, ConventionalMemorySizeKb);
@@ -1462,10 +1479,10 @@ public:
 		//else if(ppindex == 1) config |= 0x0000;
 		if(ppindex == 2) config |= 0x4000;
 		else config |= 0xc000;	// 3 ports
-#if (C_FPU)
+
 		//FPU
 		config|=0x2;
-#endif
+
 		switch (machine) {
 		case MachineType::Hercules:
 			//Startup monochrome
@@ -1534,19 +1551,15 @@ void BIOS_SetComPorts(uint16_t baseaddr[]) {
 	BIOS_SetEquipment(equipmentword);
 }
 
+static std::unique_ptr<BIOS> bios = {};
 
-static BIOS* test;
-
-void BIOS_Destroy(Section* /*sec*/){
-	delete test;
-}
-
-void BIOS_Init(Section* sec)
+void BIOS_Init()
 {
-	assert(sec);
-
-	test = new BIOS(sec);
-
-	constexpr auto changeable_at_runtime = false;
-	sec->AddDestroyFunction(&BIOS_Destroy, changeable_at_runtime);
+	bios = std::make_unique<BIOS>();
 }
+
+void BIOS_Destroy()
+{
+	bios = {};
+}
+

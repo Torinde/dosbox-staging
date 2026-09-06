@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText:  2020-2025 The DOSBox Staging Team
+// SPDX-FileCopyrightText:  2020-2026 The DOSBox Staging Team
 // SPDX-FileCopyrightText:  2002-2021 The DOSBox Team
 // SPDX-License-Identifier: GPL-2.0-or-later
 
@@ -141,19 +141,8 @@ class DOS_Device : public DOS_File {
 public:
 	DOS_Device() : DOS_File(), devnum(0) {}
 
-	DOS_Device(const DOS_Device& orig)
-		: DOS_File(orig),
-		  devnum(orig.devnum)
-	{
-
-	}
-
-	DOS_Device &operator=(const DOS_Device &orig)
-	{
-		DOS_File::operator=(orig);
-		devnum = orig.devnum;
-		return *this;
-	}
+	DOS_Device(const DOS_Device& orig) = default;
+	DOS_Device &operator=(const DOS_Device &orig) = default;
 
 	bool Read(uint8_t* data, uint16_t* size) override;
 	bool Write(uint8_t* data, uint16_t* size) override;
@@ -181,7 +170,7 @@ private:
 #define MAX_OPENDIRS 2048
 //Can be high as it's only storage (16 bit variable)
 
-class DOS_Drive_Cache {
+class DOS_Drive_Cache final {
 public:
 	enum TDirSort { NOSORT, ALPHABETICAL, DIRALPHABETICAL, ALPHABETICALREV, DIRALPHABETICALREV };
 	DOS_Drive_Cache            (void);
@@ -213,7 +202,7 @@ public:
 	void SetLabel(const char *name, bool cdrom, bool allowupdate);
 	const char *GetLabel() const { return label; }
 
-	class CFileInfo {
+	class CFileInfo final {
 	public:
 		CFileInfo(void)
 		        : orgname{0},
@@ -223,17 +212,15 @@ public:
 		          id(MAX_OPENDIRS),
 		          nextEntry(0),
 		          shortNr(0),
-		          fileList(0),
-		          longNameList(0)
+		          fileList(0)
 		{}
 
-		virtual ~CFileInfo()
+		~CFileInfo()
 		{
 			for (auto p : fileList) {
 				delete p;
 			}
 			fileList.clear();
-			longNameList.clear();
 		}
 
 		char        orgname[CROSS_LEN];
@@ -245,7 +232,6 @@ public:
 		unsigned    shortNr;
 		// contents
 		std::vector<CFileInfo*> fileList;
-		std::vector<CFileInfo*> longNameList;
 	};
 
 private:
@@ -332,19 +318,50 @@ public:
 	{
 		return info;
 	}
+
 	std::string GetInfoString() const
+	{
+		return GetTypeString() + std::string(" ") + info;
+	}
+
+	std::string GetTypeString() const
 	{
 		switch (type) {
 		case DosDriveType::Local:
-			return MSG_Get("MOUNT_TYPE_LOCAL_DIRECTORY") +
-			       std::string(" ") + info;
-		case DosDriveType::Cdrom:
-			return MSG_Get("MOUNT_TYPE_CDROM") + std::string(" ") + info;
-		case DosDriveType::Fat:
-			return MSG_Get("MOUNT_TYPE_FAT") + std::string(" ") + info;
-		case DosDriveType::Iso:
-			return MSG_Get("MOUNT_TYPE_ISO") + std::string(" ") + info;
+			return MSG_Get("MOUNT_TYPE_LOCAL_DIRECTORY");
+		case DosDriveType::Cdrom: return MSG_Get("MOUNT_TYPE_CDROM");
+		case DosDriveType::Fat: return MSG_Get("MOUNT_TYPE_FAT");
+		case DosDriveType::Iso: return MSG_Get("MOUNT_TYPE_CDROM");
 		case DosDriveType::Virtual: return MSG_Get("MOUNT_TYPE_VIRTUAL");
+		default: return MSG_Get("MOUNT_TYPE_UNKNOWN");
+		}
+	}
+
+	// Same as GetInfoString but truncating the path to fit max_length
+	std::string GetInfoStringTruncated(int max_length) const
+	{
+		switch (type) {
+		case DosDriveType::Local: {
+			int msg_length = MSG_Get("MOUNT_TYPE_LOCAL_DIRECTORY").size();
+			return MSG_Get("MOUNT_TYPE_LOCAL_DIRECTORY") +
+			       std::string(" ") +
+			       truncate_path(info, max_length - msg_length - 1);
+		}
+		// ISO and CD-ROM are interchangeable
+		case DosDriveType::Iso:
+				[[fallthrough]];
+		case DosDriveType::Cdrom: {
+			int msg_length = MSG_Get("MOUNT_TYPE_CDROM").size();
+			return MSG_Get("MOUNT_TYPE_CDROM") + std::string(" ") +
+			       truncate_path(info, max_length - msg_length - 1);
+		}
+		case DosDriveType::Fat: {
+			int msg_length = MSG_Get("MOUNT_TYPE_FAT").size();
+			return MSG_Get("MOUNT_TYPE_FAT") + std::string(" ") +
+			       truncate_path(info, max_length - msg_length - 1);
+		}
+		case DosDriveType::Virtual:
+			return MSG_Get("MOUNT_TYPE_VIRTUAL");
 		default: return MSG_Get("MOUNT_TYPE_UNKNOWN");
 		}
 	}
@@ -407,4 +424,4 @@ void VFILE_Register(const char* name, const std::vector<uint8_t>& data,
 bool VFILE_Update(const char* name, const std::vector<uint8_t> &data, const char* dir = "");
 void VFILE_Remove(const char* name, const char* dir = "");
 
-#endif
+#endif // DOSBOX_DOS_SYSTEM_H

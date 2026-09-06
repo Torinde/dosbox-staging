@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText:  2020-2025 The DOSBox Staging Team
+// SPDX-FileCopyrightText:  2020-2026 The DOSBox Staging Team
 // SPDX-FileCopyrightText:  2002-2021 The DOSBox Team
 // SPDX-License-Identifier: GPL-2.0-or-later
 
@@ -39,7 +39,7 @@
 
 // Typical values - do not rely on this, use for optimizations only. If you need
 // to be 100% certain, use the OS specific detection routines.
-#if C_TARGETCPU == ARMV8LE
+#if C_TARGET_CPU_ARM
 constexpr uint16_t HostPageSize = 16384;
 #else
 constexpr uint16_t HostPageSize = 4096;
@@ -169,7 +169,7 @@ template <typename T>
 std::function<T()> create_randomizer(const T min_value, const T max_value);
 
 // Include a message in assert, similar to static_assert:
-#define assertm(exp, msg) assert(((void)msg, exp))
+#define assertm(exp, msg) assert(((void)(msg), exp))
 // Use (void) to silent unused warnings.
 // https://en.cppreference.com/w/cpp/error/assert
 
@@ -253,9 +253,15 @@ int64_t stdio_size_kb(FILE* f);
 int64_t stdio_num_sectors(FILE* f);
 
 const std_fs::path& get_executable_path();
+
+// TODO should return optional
 std_fs::path get_resource_path(const std_fs::path& name);
+
+// TODO should return optional
 std_fs::path get_resource_path(const std_fs::path& subdir, const std_fs::path& name);
+
 const std::vector<std_fs::path>& get_resource_parent_paths();
+
 std::vector<std_fs::path> get_plugin_paths();
 
 std::vector<std_fs::path> get_directory_entries(

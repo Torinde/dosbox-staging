@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText:  2025-2025 The DOSBox Staging Team
+// SPDX-FileCopyrightText:  2025-2026 The DOSBox Staging Team
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include "disk_noise.h"
@@ -25,45 +25,59 @@ CHECK_NARROWING();
 static std::unique_ptr<DiskNoises> disk_noises    = nullptr;
 static const unsigned int DiskNoiseSampleRateInHz = 22050;
 
-DiskNoises::DiskNoises(const bool enable_floppy_disk_noise,
-                       const bool enable_hard_disk_noise,
+const char* to_string(const DiskNoiseMode disk_noise_mode)
+{
+	switch (disk_noise_mode) {
+	case DiskNoiseMode::Off: return "off";
+	case DiskNoiseMode::SeekOnly: return "seek-only";
+	case DiskNoiseMode::On: return "on";
+	default:
+		assertm(false, "Invalid DiskNoiseMode enum");
+		return "unknown disk noise mode";
+	}
+}
+
+DiskNoises::DiskNoises(const DiskNoiseMode floppy_disk_noise_mode,
+                       const DiskNoiseMode hard_disk_noise_mode,
                        const std::string& spin_up, const std::string& spin,
                        const std::vector<std::string>& hdd_seek_samples,
                        const std::string& floppy_spin_up,
                        const std::string& floppy_spin,
                        const std::vector<std::string>& floppy_seek_samples)
 {
-	if (!enable_floppy_disk_noise && !enable_hard_disk_noise) {
+	if (floppy_disk_noise_mode == DiskNoiseMode::Off &&
+	    hard_disk_noise_mode == DiskNoiseMode::Off) {
 		return;
 	}
 
-	MIXER_LockMixerThread();
-	const auto mixer_callback = std::bind(&DiskNoises::AudioCallback,
-	                                      this,
-	                                      std::placeholders::_1);
-	mix_channel = MIXER_AddChannel(mixer_callback,
-	                               DiskNoiseSampleRateInHz,
-	                               ChannelName::DiskNoise,
-	                               {ChannelFeature::Stereo});
-	mix_channel->Enable(true);
-	float vol_gain = percentage_to_gain(100);
-	mix_channel->SetAppVolume({vol_gain, vol_gain});
-
+	// Load samples
 	hdd_noise = std::make_shared<DiskNoiseDevice>(DiskType::HardDisk,
-	                                              enable_hard_disk_noise,
+	                                              hard_disk_noise_mode,
 	                                              spin_up,
 	                                              spin,
-	                                              hdd_seek_samples,
-	                                              true);
+	                                              hdd_seek_samples);
 	active_devices.emplace_back(hdd_noise);
 
 	floppy_noise = std::make_shared<DiskNoiseDevice>(DiskType::Floppy,
-	                                                 enable_floppy_disk_noise,
+	                                                 floppy_disk_noise_mode,
 	                                                 floppy_spin_up,
 	                                                 floppy_spin,
-	                                                 floppy_seek_samples,
-	                                                 false);
+	                                                 floppy_seek_samples);
 	active_devices.emplace_back(floppy_noise);
+
+	// Start audio thread
+	MIXER_LockMixerThread();
+
+	const auto mixer_callback = std::bind(&DiskNoises::AudioCallback,
+	                                      this,
+	                                      std::placeholders::_1);
+
+	mix_channel = MIXER_AddChannel(mixer_callback,
+	                               DiskNoiseSampleRateInHz,
+	                               ChannelName::DiskNoise,
+	                               {});
+	mix_channel->Enable(true);
+
 	MIXER_UnlockMixerThread();
 }
 
@@ -77,6 +91,9 @@ DiskNoises* DiskNoises::GetInstance()
 
 void DiskNoises::AudioCallback(const int num_frames_requested)
 {
+	// Check if callback runs before mix_channel is assigned.
+	assert(mix_channel != nullptr);
+
 	// stereo interleaved buffer
 	static std::vector<AudioFrame> out = {};
 	out.clear();
@@ -84,31 +101,29 @@ void DiskNoises::AudioCallback(const int num_frames_requested)
 	// Mix audio frames from all active devices
 	for (auto i = 0; i < num_frames_requested; ++i) {
 		AudioFrame mixed_sample = {};
-		for (const auto& device : disk_noises->active_devices) {
-			AudioFrame sample = device->GetNextFrame();
+		for (const auto& device : active_devices) {
+			auto sample = device->GetNextFrame();
 			mixed_sample += sample;
 		}
 		out.emplace_back(mixed_sample);
 	}
 
-	disk_noises->mix_channel->AddAudioFrames(out);
+	mix_channel->AddAudioFrames(out);
 }
 
 DiskNoises::~DiskNoises()
 {
-	MIXER_LockMixerThread();
-
-	floppy_noise.reset();
-	hdd_noise.reset();
-	active_devices.clear();
-
-	if (active_devices.empty() && mix_channel) {
+	// Stop audio thread and unregister channel
+	if (mix_channel) {
 		mix_channel->Enable(false);
 		MIXER_DeregisterChannel(mix_channel);
 		mix_channel.reset();
 	}
 
-	MIXER_UnlockMixerThread();
+	// Destroy devices and associated samples
+	floppy_noise.reset();
+	hdd_noise.reset();
+	active_devices.clear();
 }
 
 AudioFrame DiskNoiseDevice::GetNextFrame()
@@ -129,10 +144,9 @@ AudioFrame DiskNoiseDevice::GetNextFrame()
 		}
 	} else if (!spin.sample.empty() &&
 	           (spin.spin_it != spin.sample.end() || spin.loop)) {
-		// Loop the spin sound if enabled. Used for
-		// persistent HDD noise Not used for floppy
-		// noise because motor should stop after r/w
-		// operations aredone
+		// Loop the spin sound if enabled. Used for persistent HDD
+		// noise. Not used for floppy noise because motor should stop
+		// after read-write operations are done.
 		if (spin.spin_it == spin.sample.end() && spin.loop) {
 			spin.spin_it = spin.sample.begin();
 		}
@@ -170,8 +184,8 @@ void DiskNoiseDevice::LoadSample(const std::string& path,
 
 	const auto candidate_paths = {std_fs::path(path),
 	                              std_fs::path(path + SampleExtension),
-	                              get_resource_path(DiskNoiseDir, path),
-	                              get_resource_path(DiskNoiseDir,
+	                              get_resource_path(DiskNoisesDir, path),
+	                              get_resource_path(DiskNoisesDir,
 	                                                path + SampleExtension)};
 
 	for (const auto& candidate : candidate_paths) {
@@ -182,8 +196,8 @@ void DiskNoiseDevice::LoadSample(const std::string& path,
 		// Load entire file into memory
 		std::ifstream file(candidate, std::ios::binary | std::ios::ate);
 		if (!file) {
-			LOG_WARNING("DISKNOISE: Failed to open file '%s'",
-			            candidate.string().c_str());
+			LOG_ERR("DISKNOISE: Failed to open file '%s'",
+			        candidate.string().c_str());
 			continue;
 		}
 
@@ -193,8 +207,8 @@ void DiskNoiseDevice::LoadSample(const std::string& path,
 		std::vector<uint8_t> file_data = {};
 		file_data.resize(static_cast<size_t>(size));
 		if (!file.read(reinterpret_cast<char*>(file_data.data()), size)) {
-			LOG_WARNING("DISKNOISE: Failed to read file '%s'",
-			            candidate.string().c_str());
+			LOG_ERR("DISKNOISE: Failed to read file '%s'",
+			        candidate.string().c_str());
 			continue;
 		}
 
@@ -203,8 +217,8 @@ void DiskNoiseDevice::LoadSample(const std::string& path,
 		                                     file_data.size(),
 		                                     nullptr);
 		if (!decoder) {
-			LOG_WARNING("DISKNOISE: Failed to parse FLAC file '%s'",
-			            candidate.string().c_str());
+			LOG_ERR("DISKNOISE: Failed to parse FLAC file '%s'",
+			        candidate.string().c_str());
 			continue;
 		}
 
@@ -214,16 +228,18 @@ void DiskNoiseDevice::LoadSample(const std::string& path,
 		const auto HertzToKilohertz = 1000;
 
 		if (channels != 1) {
-			LOG_WARNING("DISKNOISE: FLAC file '%s' is not mono.",
-			            candidate.string().c_str());
+			LOG_ERR("DISKNOISE: FLAC file '%s' is not mono",
+			        candidate.string().c_str());
+
 			drflac_close(decoder);
 			continue;
-		}
+		}		
 		if (sample_rate != DiskNoiseSampleRateInHz) {
-			LOG_WARNING("DISKNOISE: FLAC file '%s' should be %dkHz, but %dkHz was found",
-			            candidate.string().c_str(),
-			            DiskNoiseSampleRateInHz / HertzToKilohertz,
-			            sample_rate / HertzToKilohertz);
+			LOG_ERR("DISKNOISE: FLAC file '%s' should be %d kHz, but %d kHz was found",
+			        candidate.string().c_str(),
+			        DiskNoiseSampleRateInHz / HertzToKilohertz,
+			        sample_rate / HertzToKilohertz);
+
 			drflac_close(decoder);
 			continue;
 		}
@@ -234,13 +250,13 @@ void DiskNoiseDevice::LoadSample(const std::string& path,
 		drflac_close(decoder);
 
 		if (frames_read == 0) {
-			LOG_WARNING("DISKNOISE: Failed to decode FLAC frames from '%s'",
-			            candidate.string().c_str());
+			LOG_ERR("DISKNOISE: Failed to decode FLAC frames from '%s'",
+			        candidate.string().c_str());
 			continue;
 		}
 
 		// Scale data to integer value range
-		const float scale = static_cast<float>(INT16_MAX);
+		const auto scale = static_cast<float>(INT16_MAX);
 		for (auto& sample : destination_buffer) {
 			sample *= scale;
 		}
@@ -251,7 +267,7 @@ void DiskNoiseDevice::LoadSample(const std::string& path,
 		return;
 	}
 
-	LOG_WARNING("DISKNOISE: Failed to find FLAC file: '%s'", path.c_str());
+	LOG_ERR("DISKNOISE: Failed to find FLAC file: '%s'", path.c_str());
 }
 
 void DiskNoiseDevice::LoadSeekSamples(const std::vector<std::string>& paths)
@@ -334,12 +350,13 @@ size_t DiskNoiseDevice::ChooseSeekIndex() const
 		const size_t r = static_cast<size_t>(rand()) % valid_indices.size();
 		return valid_indices[r];
 	}
-	default: {
-		LOG_WARNING("DISKNOISE: Unknown disk type '%d' for ChooseSeekIndex",
-		            static_cast<int>(disk_type));
+	case DiskType::CdRom:
+		// CD-ROM does not currently support disk noise emulation
 		return 0;
+
+	default: assertm(false, "Invalid ChooseSeekIndex type"); return 0;
 	}
-	}
+
 	return 0;
 }
 
@@ -348,7 +365,7 @@ size_t DiskNoiseDevice::ChooseSeekIndex() const
 void DiskNoiseDevice::SetLastIoPath(const std::string& path,
                                     DiskNoiseIoType disk_operation_type)
 {
-	if (!disk_noise_enabled || path.empty()) {
+	if (disk_noise_mode == DiskNoiseMode::Off || path.empty()) {
 		return;
 	}
 
@@ -370,31 +387,43 @@ void DiskNoiseDevice::SetLastIoPath(const std::string& path,
 }
 
 DiskNoiseDevice::DiskNoiseDevice(const DiskType disk_type,
-                                 const bool disk_noise_enabled,
+                                 const DiskNoiseMode disk_noise_mode,
                                  const std::string& spin_up_sample_path,
                                  const std::string& spin_sample_path,
-                                 const std::vector<std::string>& seek_sample_paths,
-                                 bool loop_spin_sample)
-        : disk_noise_enabled(disk_noise_enabled),
+                                 const std::vector<std::string>& seek_sample_paths)
+        : disk_noise_mode(disk_noise_mode),
           disk_type(disk_type)
 {
-	if (!disk_noise_enabled) {
-		LOG_INFO("DISKNOISE: Disk noise emulation disabled");
+
+	LOG_INFO("DISKNOISE: %s noise emulation %s",
+	         to_string(disk_type),
+	         to_string(disk_noise_mode));
+
+	// Do not continue further if disk noise is disabled
+	if (disk_noise_mode == DiskNoiseMode::Off) {
 		return;
 	}
 
-	spin.loop = loop_spin_sample;
-	LoadSample(spin_up_sample_path, spin.spin_up_sample);
-	LoadSample(spin_sample_path, spin.sample);
+	// Only hard disk noises loop the spin sample
+	spin.loop = (disk_type == DiskType::HardDisk);
 
-	// After loading spin_up_sample and sample:
-	if (!spin.spin_up_sample.empty()) {
+	// Only attempt to load spin samples if disk noise mode is "on" instead
+	// of "seek-only"
+	if (disk_noise_mode == DiskNoiseMode::On) {
+		LoadSample(spin_up_sample_path, spin.spin_up_sample);
+		LoadSample(spin_sample_path, spin.sample);
+	}
+
+	// Start iterators at the beginning or end, depending on whether the
+	// disk noise is looping (HDD) or not (FDD)
+	// This prevents fdd spin noise on initial startup
+	if (disk_type == DiskType::HardDisk && !spin.spin_up_sample.empty()) {
 		spin.spin_up_it = spin.spin_up_sample.begin();
 	} else {
 		spin.spin_up_it = spin.spin_up_sample.end();
 	}
 
-	if (!spin.sample.empty()) {
+	if (disk_type == DiskType::HardDisk && !spin.sample.empty()) {
 		spin.spin_it = spin.sample.begin();
 	} else {
 		spin.spin_it = spin.sample.end();
@@ -404,21 +433,28 @@ DiskNoiseDevice::DiskNoiseDevice(const DiskType disk_type,
 	seek.current_sample.clear();
 	seek.current_it = seek.current_sample.end();
 
-	DOS_RegisterIoCallback(
-	        [this]() {
-		        // This callback is called from the DOS code
-		        // to trigger the spin and seek sounds
-		        ActivateSpin();
-		        PlaySeek();
-	        },
-	        disk_type);
+	auto io_callback = [this]() {
+		// This callback is called from the DOS code
+		// to trigger the spin and seek sounds
+		ActivateSpin();
+		PlaySeek();
+	};
+
+	DOS_RegisterIoCallback(io_callback, disk_type);
 }
 
-DiskNoiseDevice::~DiskNoiseDevice() = default;
+// Destructor unregisters the callbacks
+DiskNoiseDevice::~DiskNoiseDevice()
+{
+	DOS_UnregisterIoCallback(disk_type);
+}
 
 void DiskNoiseDevice::ActivateSpin()
 {
-	if (!disk_noise_enabled) {
+	// Lock mutex to guard against GetNextFrame
+	std::lock_guard<std::mutex> lock(mutex);
+
+	if (disk_noise_mode == DiskNoiseMode::Off) {
 		return;
 	}
 
@@ -436,8 +472,10 @@ void DiskNoiseDevice::ActivateSpin()
 
 void DiskNoiseDevice::PlaySeek()
 {
+	// Lock mutex to guard against GetNextFrame
 	std::lock_guard<std::mutex> lock(mutex);
-	if (!disk_noise_enabled) {
+
+	if (disk_noise_mode == DiskNoiseMode::Off) {
 		return;
 	}
 
@@ -477,40 +515,50 @@ void DiskNoises::SetLastIoPath(const std::string& path,
 	case DiskType::CdRom:
 		// CD-ROM does not currently support disk noise emulation
 		break;
-	default:
-		LOG_WARNING("DISKNOISE: Unknown disk type '%d' for SetLastIoPath",
-		            static_cast<int>(disk_type));
-		break;
+	default: assertm(false, "Invalid DiskType type"); break;
 	}
 }
 
-static void disknoise_destroy([[maybe_unused]] Section* sec)
+static DiskNoiseMode get_disk_noise_mode(const std::string& mode)
 {
-	MIXER_LockMixerThread();
-	disk_noises.reset();
-	MIXER_UnlockMixerThread();
+    if (has_true(mode)) {
+		return DiskNoiseMode::On;
+	} else if (mode == "seek-only") {
+		return DiskNoiseMode::SeekOnly;
+	} else {
+        assert(has_false(mode));
+		return DiskNoiseMode::Off;
+	}
 }
 
-static void disknoise_init(Section* section)
+void DISKNOISE_Init()
 {
+	const auto section = get_section("disknoise");
+	assert(section);
+
 	constexpr auto MaxNumSeekSamples = 9;
 
-	assert(section);
 	const auto prop = static_cast<SectionProp*>(section);
 
-	const bool enable_floppy_disk_noise = prop->GetBool("floppy_disk_noise");
-	const bool enable_hard_disk_noise = prop->GetBool("hard_disk_noise");
+	const auto enable_floppy_disk_noise = get_disk_noise_mode(
+	        prop->GetString("floppy_disk_noise"));
+	const auto enable_hard_disk_noise = get_disk_noise_mode(
+	        prop->GetString("hard_disk_noise"));
 
-	const auto spin_up                        = "hdd_spinup.flac";
-	const auto spin                           = "hdd_spin.flac";
+	const auto spin_up = "hdd_spinup.flac";
+	const auto spin    = "hdd_spin.flac";
+
 	std::vector<std::string> hdd_seek_samples = {};
+
 	for (auto i = 1; i <= MaxNumSeekSamples; ++i) {
 		hdd_seek_samples.emplace_back("hdd_seek" + std::to_string(i) + ".flac");
 	}
 
-	const auto floppy_spin_up                    = "fdd_spinup.flac";
-	const auto floppy_spin                       = "fdd_spin.flac";
+	const auto floppy_spin_up = "fdd_spinup.flac";
+	const auto floppy_spin    = "fdd_spin.flac";
+
 	std::vector<std::string> floppy_seek_samples = {};
+
 	for (auto i = 1; i <= MaxNumSeekSamples; ++i) {
 		floppy_seek_samples.emplace_back("fdd_seek" +
 		                                 std::to_string(i) + ".flac");
@@ -523,37 +571,53 @@ static void disknoise_init(Section* section)
 	                                           floppy_spin_up,
 	                                           floppy_spin,
 	                                           floppy_seek_samples);
-
-	constexpr auto changeable_at_runtime = true;
-	section->AddDestroyFunction(&disknoise_destroy, changeable_at_runtime);
 }
 
-static void init_disknoise_dosbox_settings(SectionProp& secprop)
+void DISKNOISE_Destroy()
 {
-	constexpr auto OnlyAtStart = Property::Changeable::OnlyAtStart;
+	MIXER_LockMixerThread();
+	disk_noises.reset();
+	MIXER_UnlockMixerThread();
+}
 
-	auto* bool_prop = secprop.AddBool("hard_disk_noise", OnlyAtStart, false);
-	bool_prop->SetHelp(
-	        "Enable emulated hard disk noises ('off' by default).\n"
-	        "Plays spinning disk and seek noise sounds when enabled. It's recommended to\n"
-	        "set 'hard_disk_speed' to lower than 'maximum' for an authentic experience.");
+static void init_disknoise_config_settings(SectionProp& secprop)
+{
+	constexpr auto Always = Property::Changeable::Always;
 
-	bool_prop = secprop.AddBool("floppy_disk_noise", OnlyAtStart, false);
-	bool_prop->SetHelp(
-	        "Enable emulated floppy disk noises ('off' by default).\n"
-	        "Plays spinning disk and seek noise sounds when enabled. It's recommended to\n"
-	        "set 'floppy_disk_speed' to lower than 'maximum' for an authentic experience.");
+	auto* str_prop = secprop.AddString("hard_disk_noise", Always, "off");
+	str_prop->SetValues({"off", "seek-only", "on"});
+	str_prop->SetHelp(
+	        "Enable emulated hard disk noises ('off' by default). Plays spinning disk and\n"
+	        "seek noise sounds when enabled. It's recommended to set 'hard_disk_speed' to\n"
+	        "lower than 'maximum' for an authentic experience. Possible values:\n"
+	        "\n"
+	        "  off:           No hard disk noises (default).\n"
+	        "  seek-only:     Play hard disk seek noises only, no spin noises.\n"
+	        "  on:            Play both hard disk seek and spin noises.\n"
+	        "\n"
+	        "Note: You can customise the disk noise volume by changing the volume of the\n"
+	        "      `DISKNOISE` mixer channel.");
+
+	str_prop = secprop.AddString("floppy_disk_noise", Always, "off");
+	str_prop->SetValues({"off", "seek-only", "on"});
+	str_prop->SetHelp(
+	        "Enable emulated floppy disk noises ('off' by default). Plays spinning disk and\n"
+	        "seek noise sounds when enabled. It's recommended to set 'floppy_disk_speed' to\n"
+	        "lower than 'maximum' for an authentic experience. Possible values:\n"
+	        "\n"
+	        "  off:           No floppy disk noises (default).\n"
+	        "  seek-only:     Play floppy disk seek noises only, no spin noises.\n"
+	        "  on:            Play both floppy disk seek and spin noises.\n"
+	        "\n"
+	        "Note: You can customise the disk noise volume by changing the volume of the\n"
+	        "      `DISKNOISE` mixer channel.");
 }
 
 void DISKNOISE_AddConfigSection(const ConfigPtr& conf)
 {
 	assert(conf);
 
-	constexpr auto ChangeableAtRuntime = false;
+	auto section = conf->AddSection("disknoise");
 
-	SectionProp* sec = conf->AddSectionProp("disknoise",
-	                                          &disknoise_init,
-	                                          ChangeableAtRuntime);
-	assert(sec);
-	init_disknoise_dosbox_settings(*sec);
+	init_disknoise_config_settings(*section);
 }

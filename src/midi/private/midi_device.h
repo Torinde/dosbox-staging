@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText:  2020-2025 The DOSBox Staging Team
+// SPDX-FileCopyrightText:  2020-2026 The DOSBox Staging Team
 // SPDX-FileCopyrightText:  2002-2021 The DOSBox Team
 // SPDX-License-Identifier: GPL-2.0-or-later
 
@@ -26,15 +26,22 @@ class MidiDevice {
 public:
 	enum class Type { Internal, External };
 
-	virtual ~MidiDevice() {}
+	virtual ~MidiDevice() = default;
 
 	virtual std::string GetName() const = 0;
 	virtual Type GetType() const        = 0;
 
-	virtual void SendMidiMessage([[maybe_unused]] const MidiMessage& msg) = 0;
+	virtual void SendMidiMessage(const MidiMessage& msg)      = 0;
+	virtual void SendSysExMessage(uint8_t* sysex, size_t len) = 0;
 
-	virtual void SendSysExMessage([[maybe_unused]] uint8_t* sysex,
-	                              [[maybe_unused]] size_t len) = 0;
+	// Halt / resume the internal renderer thread (FluidSynth, MT-32,
+	// SoundCanvas).
+	//
+	// No-op default for External devices, which don't run
+	// a renderer; their pause path is the volume-zero broadcast in
+	// `MIDI_Mute()`.
+	virtual void Pause() {}
+	virtual void Resume() {}
 };
 
 void MIDI_Reset(MidiDevice* device);

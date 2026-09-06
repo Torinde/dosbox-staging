@@ -8,7 +8,7 @@
 
 void MSG_NotifyNewCodePage() {}
 
-void MSG_Add(const std::string&, const std::string&) {}
+void MSG_Add(const std::string&, const std::string&, const MessageLocation&) {}
 
 std::string MSG_Get(const std::string&)
 {
@@ -23,6 +23,11 @@ std::string MSG_GetEnglishRaw(const std::string&)
 std::string MSG_GetTranslatedRaw(const std::string&)
 {
 	return {};
+}
+
+std::string MSG_GetLanguage()
+{
+	return "en";
 }
 
 bool MSG_Exists(const std::string&)

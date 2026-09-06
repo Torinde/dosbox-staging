@@ -9,6 +9,7 @@
 #include <cmath>
 #include <memory>
 #include <queue>
+#include <vector>
 
 #include "ESFMu/esfm.h"
 #include "nuked/opl3.h"
@@ -16,10 +17,11 @@
 #include "private/adlib_gold.h"
 
 #include "audio/mixer.h"
-#include "config/setup.h"
-#include "hardware/hardware.h"
+#include "config/config.h"
 #include "hardware/pic.h"
 #include "hardware/port.h"
+
+enum class OplMode { None, Opl2, DualOpl2, Opl3, Opl3Gold, Esfm };
 
 class Timer {
 public:
@@ -78,9 +80,6 @@ public:
 // The cache for two OPL chips (Dual OPL2) or an OPL3 (stereo)
 typedef uint8_t OplRegisterCache[512];
 
-// Internal class used for DRO capturing
-class OplCapture;
-
 enum class EsfmMode { Legacy, Native };
 
 class Opl {
@@ -88,8 +87,6 @@ public:
 	MixerChannelPtr channel = {};
 
 	OplRegisterCache cache = {};
-
-	std::unique_ptr<OplCapture> capture = {};
 
 	Opl(Section* configuration, const OplMode opl_mode);
 	~Opl();
@@ -125,6 +122,8 @@ private:
 	// Playback related
 	double last_rendered_ms = 0.0;
 	double ms_per_frame     = 0.0;
+
+	std::vector<AudioFrame> render_buf = {};
 
 	// Last selected address in the chip for the different modes
 	union {
@@ -165,5 +164,11 @@ private:
 
 	void EsfmSetLegacyMode();
 };
+
+void OPL_Init(OplMode mode);
+void OPL_Destroy();
+
+// CMS/Game Blaster, OPL, and ESFM configuration and initialisation
+void OPL_AddConfigSettings();
 
 #endif // DOSBOX_OPL_H

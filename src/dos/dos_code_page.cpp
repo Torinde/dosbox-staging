@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText:  2025-2025 The DOSBox Staging Team
+// SPDX-FileCopyrightText:  2025-2026 The DOSBox Staging Team
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include "dos_code_page.h"
@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <array>
 #include <fstream>
+#include <iterator>
 #include <optional>
 #include <set>
 #include <unordered_map>
@@ -407,7 +408,7 @@ bool CpiReader::IsCopyrightString() const
 	if (remaining < 2) {
 		return true;
 	}
-	const size_t value = content[offset] + (content[offset + 1] << 8);
+	const size_t value = content[offset] + (content[offset + 1] << 8); //-V557
 	if (value > remaining) {
 		return true;
 	}
@@ -897,7 +898,7 @@ void CpiParser::StoreFontType(const CodePageEntryHeader& header, ParserResult& r
 	                        header.device_name.c_str(),
 	                        header.code_page));
 	} else {
-		found.code_pages.insert({header.device_name, header.code_page});
+		found.code_pages.emplace(header.device_name, header.code_page);
 	}
 
 	if (is_screen) {
@@ -1979,32 +1980,36 @@ static void set_screen_font(const ScreenFont& screen_font,
 	auto set_font_8x16 = [](const ScreenFont& screen_font) {
 		auto font = screen_font.font_8x16;
 		font.resize(ScreenFont::FullSize_8x16, 0);
+
 		const auto memory = RealToPhysical(int10.rom.font_16);
 		for (uint16_t idx = 0; idx < font.size(); ++idx) {
-			phys_writeb(memory + idx, font.at(idx));
+			phys_writeb(memory + idx, font[idx]);
 		}
 	};
 
 	auto set_font_8x14 = [](const ScreenFont& screen_font) {
 		auto font = screen_font.font_8x14;
 		font.resize(ScreenFont::FullSize_8x14, 0);
+
 		const auto memory = RealToPhysical(int10.rom.font_14);
 		for (uint16_t idx = 0; idx < font.size(); ++idx) {
-			phys_writeb(memory + idx, font.at(idx));
+			phys_writeb(memory + idx, font[idx]);
 		}
 	};
 
 	auto set_font_8x8 = [](const ScreenFont& screen_font) {
 		auto font = screen_font.font_8x8;
 		font.resize(ScreenFont::FullSize_8x8, 0);
+
 		const auto middle   = static_cast<uint16_t>(font.size() / 2);
 		const auto memory_1 = RealToPhysical(int10.rom.font_8_first);
 		const auto memory_2 = RealToPhysical(int10.rom.font_8_second);
+
 		for (uint16_t idx = 0; idx < middle; ++idx) {
-			phys_writeb(memory_1 + idx, font.at(idx));
+			phys_writeb(memory_1 + idx, font[idx]);
 		}
 		for (uint16_t idx = middle; idx < font.size(); ++idx) {
-			phys_writeb(memory_2 - middle + idx, font.at(idx));
+			phys_writeb(memory_2 - middle + idx, font[idx]);
 		}
 	};
 
@@ -2040,6 +2045,7 @@ static void set_screen_font(const ScreenFont& screen_font,
 	if (CurMode->type == M_TEXT) {
 		INT10_ReloadFont();
 	}
+
 	INT10_SetupRomMemoryChecksum();
 }
 

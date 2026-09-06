@@ -1,4 +1,5 @@
 // SPDX-FileCopyrightText:  2002-2021 The DOSBox Team
+// SPDX-FileCopyrightText:  2020-2026 The DOSBox Staging Team
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include "vga.h"
@@ -8,6 +9,7 @@
 #include <string>
 #include <utility>
 
+#include "gui/common.h"
 #include "hardware/pic.h"
 #include "ints/int10.h"
 #include "misc/logging.h"
@@ -86,63 +88,6 @@ void VGA_DetermineMode(void) {
 	case 7: VGA_SetMode(M_LIN24); break;
 	case 13:VGA_SetMode(M_LIN32);break;
 	}
-}
-
-const char* to_string(const GraphicsStandard g)
-{
-	switch (g) {
-	case GraphicsStandard::Hercules: return "Hercules";
-	case GraphicsStandard::Cga: return "CGA";
-	case GraphicsStandard::Pcjr: return "PCjr";
-	case GraphicsStandard::Tga: return "Tandy";
-	case GraphicsStandard::Ega: return "EGA";
-	case GraphicsStandard::Vga: return "VGA";
-	case GraphicsStandard::Svga: return "SVGA";
-	case GraphicsStandard::Vesa: return "VESA";
-	default: assertm(false, "Invalid GraphicsStandard"); return "";
-	}
-}
-
-const char* to_string(const ColorDepth c)
-{
-	switch (c) {
-	case ColorDepth::Monochrome: return "monochrome";
-	case ColorDepth::Composite: return "composite";
-	case ColorDepth::IndexedColor2: return "2-colour";
-	case ColorDepth::IndexedColor4: return "4-colour";
-	case ColorDepth::IndexedColor16: return "16-colour";
-	case ColorDepth::IndexedColor256: return "256-colour";
-	case ColorDepth::HighColor15Bit: return "15-bit high colour";
-	case ColorDepth::HighColor16Bit: return "16-bit high colour";
-	case ColorDepth::TrueColor24Bit: return "24-bit true colour";
-	default: assertm(false, "Invalid ColorDepth"); return "";
-	}
-}
-
-// Return a human-readable description of the video mode, e.g.:
-//   - "CGA 640x200 16-colour text mode 03h"
-//   - "EGA 640x350 16-colour graphics mode 10h"
-//   - "VGA 720x400 16-colour text mode 03h"
-//   - "VGA 320x200 256-colour graphics mode 13h"
-//   - "VGA 360x240 256-colour graphics mode"
-//   - "VESA 800x600 256-colour graphics mode 103h"
-std::string to_string(const VideoMode& video_mode)
-{
-	const char* mode_type = (video_mode.is_graphics_mode ? "graphics mode"
-	                                                     : "text mode");
-
-	const auto mode_number = (video_mode.is_custom_mode
-	                                  ? ""
-	                                  : format_str(" %02Xh",
-	                                                  video_mode.bios_mode_number));
-
-	return format_str("%s %dx%d %s %s%s",
-	                     to_string(video_mode.graphics_standard),
-	                     video_mode.width,
-	                     video_mode.height,
-	                     to_string(video_mode.color_depth),
-	                     mode_type,
-	                     mode_number.c_str());
 }
 
 const char* to_string(const VGAModes mode)
@@ -313,13 +258,8 @@ void VGA_SetCGA2Table(uint8_t val0,uint8_t val1) {
 	uint8_t total[2]={ val0,val1};
 	for (Bitu i=0;i<16;i++) {
 		CGA_2_Table[i]=
-#ifdef WORDS_BIGENDIAN
-			(total[(i >> 0) & 1] << 0  ) | (total[(i >> 1) & 1] << 8  ) |
-			(total[(i >> 2) & 1] << 16 ) | (total[(i >> 3) & 1] << 24 );
-#else 
 			(total[(i >> 3) & 1] << 0  ) | (total[(i >> 2) & 1] << 8  ) |
 			(total[(i >> 1) & 1] << 16 ) | (total[(i >> 0) & 1] << 24 );
-#endif
 	}
 }
 
@@ -327,29 +267,16 @@ void VGA_SetCGA4Table(uint8_t val0,uint8_t val1,uint8_t val2,uint8_t val3) {
 	uint8_t total[4]={ val0,val1,val2,val3};
 	for (Bitu i=0;i<256;i++) {
 		CGA_4_Table[i]=
-#ifdef WORDS_BIGENDIAN
-			(total[(i >> 0) & 3] << 0  ) | (total[(i >> 2) & 3] << 8  ) |
-			(total[(i >> 4) & 3] << 16 ) | (total[(i >> 6) & 3] << 24 );
-#else
 			(total[(i >> 6) & 3] << 0  ) | (total[(i >> 4) & 3] << 8  ) |
 			(total[(i >> 2) & 3] << 16 ) | (total[(i >> 0) & 3] << 24 );
-#endif
 		CGA_4_HiRes_Table[i]=
-#ifdef WORDS_BIGENDIAN
-			(total[((i >> 0) & 1) | ((i >> 3) & 2)] << 0  ) | (total[((i >> 1) & 1) | ((i >> 4) & 2)] << 8  ) |
-			(total[((i >> 2) & 1) | ((i >> 5) & 2)] << 16 ) | (total[((i >> 3) & 1) | ((i >> 6) & 2)] << 24 );
-#else
 			(total[((i >> 3) & 1) | ((i >> 6) & 2)] << 0  ) | (total[((i >> 2) & 1) | ((i >> 5) & 2)] << 8  ) |
 			(total[((i >> 1) & 1) | ((i >> 4) & 2)] << 16 ) | (total[((i >> 0) & 1) | ((i >> 3) & 2)] << 24 );
-#endif
 	}	
 }
 
 void VGA_AllowVgaScanDoubling(const bool allow)
 {
-	if (!is_machine_vga_or_better()) {
-		return;
-	}
 	if (allow && !vga.draw.scan_doubling_allowed) {
 		LOG_MSG("VGA: Double scanning VGA video modes enabled");
 	}
@@ -370,12 +297,16 @@ void VGA_AllowPixelDoubling(const bool allow)
 	vga.draw.pixel_doubling_allowed = allow;
 }
 
-void VGA_Init(Section* sec)
+void VGA_Init()
 {
 	vga.draw.resizing = false;
-	vga.mode          = M_ERROR; // For first init
+
+	// For first init
+	vga.mode = M_ERROR;
+
 	SVGA_Setup_Driver();
-	VGA_SetupMemory(sec);
+
+	VGA_SetupMemory();
 	VGA_SetupMisc();
 	VGA_SetupDAC();
 	VGA_SetupGFX();
@@ -383,84 +314,61 @@ void VGA_Init(Section* sec)
 	VGA_SetupAttr();
 	VGA_SetupOther();
 	VGA_SetupXGA();
-	VGA_SetClock(0,CLK_25);
-	VGA_SetClock(1,CLK_28);
-/* Generate tables */
-	VGA_SetCGA2Table(0,1);
-	VGA_SetCGA4Table(0,1,2,3);
-	Bitu i,j;
-	for (i=0;i<256;i++) {
-		ExpandTable[i]=i | (i << 8)| (i <<16) | (i << 24);
+	VGA_SetClock(0, CLK_25);
+	VGA_SetClock(1, CLK_28);
+
+	// Generate tables
+	VGA_SetCGA2Table(0, 1);
+	VGA_SetCGA4Table(0, 1, 2, 3);
+
+	Bitu i, j;
+	for (i = 0; i < 256; i++) {
+		ExpandTable[i] = i | (i << 8) | (i << 16) | (i << 24);
 	}
-	for (i=0;i<16;i++) {
-		TXT_FG_Table[i]=i | (i << 8)| (i <<16) | (i << 24);
-		TXT_BG_Table[i]=i | (i << 8)| (i <<16) | (i << 24);
-#ifdef WORDS_BIGENDIAN
-		FillTable[i]=
-			((i & 1) ? 0xff000000 : 0) |
-			((i & 2) ? 0x00ff0000 : 0) |
-			((i & 4) ? 0x0000ff00 : 0) |
-			((i & 8) ? 0x000000ff : 0) ;
-		TXT_Font_Table[i]=
-			((i & 1) ? 0x000000ff : 0) |
-			((i & 2) ? 0x0000ff00 : 0) |
-			((i & 4) ? 0x00ff0000 : 0) |
-			((i & 8) ? 0xff000000 : 0) ;
-#else 
-		FillTable[i]=
-			((i & 1) ? 0x000000ff : 0) |
-			((i & 2) ? 0x0000ff00 : 0) |
-			((i & 4) ? 0x00ff0000 : 0) |
-			((i & 8) ? 0xff000000 : 0) ;
-		TXT_Font_Table[i]=	
-			((i & 1) ? 0xff000000 : 0) |
-			((i & 2) ? 0x00ff0000 : 0) |
-			((i & 4) ? 0x0000ff00 : 0) |
-			((i & 8) ? 0x000000ff : 0) ;
-#endif
+
+	for (i = 0; i < 16; i++) {
+		TXT_FG_Table[i] = i | (i << 8) | (i << 16) | (i << 24);
+		TXT_BG_Table[i] = i | (i << 8) | (i << 16) | (i << 24);
+		FillTable[i] = ((i & 1) ? 0x000000ff : 0) |
+		               ((i & 2) ? 0x0000ff00 : 0) |
+		               ((i & 4) ? 0x00ff0000 : 0) |
+		               ((i & 8) ? 0xff000000 : 0);
+
+		TXT_Font_Table[i] = ((i & 1) ? 0xff000000 : 0) |
+		                    ((i & 2) ? 0x00ff0000 : 0) |
+		                    ((i & 4) ? 0x0000ff00 : 0) |
+		                    ((i & 8) ? 0x000000ff : 0);
 	}
-	for (j=0;j<4;j++) {
-		for (i=0;i<16;i++) {
-#ifdef WORDS_BIGENDIAN
-			Expand16Table[j][i] =
-				((i & 1) ? 1 << j : 0) |
-				((i & 2) ? 1 << (8 + j) : 0) |
-				((i & 4) ? 1 << (16 + j) : 0) |
-				((i & 8) ? 1 << (24 + j) : 0);
-#else
-			Expand16Table[j][i] =
-				((i & 1) ? 1 << (24 + j) : 0) |
-				((i & 2) ? 1 << (16 + j) : 0) |
-				((i & 4) ? 1 << (8 + j) : 0) |
-				((i & 8) ? 1 << j : 0);
-#endif
+
+	for (j = 0; j < 4; j++) {
+		for (i = 0; i < 16; i++) {
+			Expand16Table[j][i] = ((i & 1) ? 1 << (24 + j) : 0) |
+			                      ((i & 2) ? 1 << (16 + j) : 0) |
+			                      ((i & 4) ? 1 << (8 + j) : 0) |
+			                      ((i & 8) ? 1 << j : 0);
 		}
 	}
 }
 
-void SVGA_Setup_Driver(void) {
+void VGA_Destroy()
+{
+   VGA_DestroyMemory();
+}
+
+void SVGA_Setup_Driver(void)
+{
 	memset(&svga, 0, sizeof(SVGA_Driver));
 
-	switch(svga_type) {
-	case SvgaType::S3:
-		SVGA_Setup_S3();
-		break;
-	case SvgaType::TsengEt3k:
-		SVGA_Setup_TsengEt3k();
-		break;
-	case SvgaType::TsengEt4k:
-		SVGA_Setup_TsengEt4k();
-		break;
-	case SvgaType::Paradise:
-		SVGA_Setup_Paradise();
-		break;
-	default:
-		vga.vmemsize = vga.vmemwrap = 256*1024;
-		break;
+	switch (svga_type) {
+	case SvgaType::S3: SVGA_Setup_S3(); break;
+	case SvgaType::TsengEt3k: SVGA_Setup_TsengEt3k(); break;
+	case SvgaType::TsengEt4k: SVGA_Setup_TsengEt4k(); break;
+	case SvgaType::Paradise: SVGA_Setup_Paradise(); break;
+	default: vga.vmemsize = vga.vmemwrap = 256 * 1024; break;
 	}
 }
 
-const VideoMode& VGA_GetCurrentVideoMode()
+VideoMode VGA_GetCurrentVideoMode()
 {
 	// This function is only 100% safe to call from *outside* of the VGA
 	// code! Outside of the VGA and video BIOS related code, this function

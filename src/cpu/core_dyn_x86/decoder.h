@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText:  2021-2025 The DOSBox Staging Team
+// SPDX-FileCopyrightText:  2021-2026 The DOSBox Staging Team
 // SPDX-FileCopyrightText:  2002-2021 The DOSBox Team
 // SPDX-License-Identifier: GPL-2.0-or-later
 
@@ -383,22 +383,9 @@ static void dyn_fill_blocks(void) {
 #ifdef X86_DYNFPU_DH_ENABLED
 			case fpu_restore:
 				dyn_loadstate(&save_info[sct].state);
-#if C_TARGETCPU == X86
-				cache_addb(0xd9);   // FNSTCW fpu.host_cw
-				cache_addb(0x3d);
-				cache_addd((uint32_t)(&dyn_dh_fpu.host_cw));
-				cache_addb(0xdd);	// FRSTOR fpu.state (fpu_restore)
-				cache_addb(0x25);
-				cache_addd((uint32_t)(&dyn_dh_fpu.state));
-				cache_addb(0xC6);   // mov byte [fpu.state_used], 1
-				cache_addb(0x05);
-				cache_addd((uint32_t)(&dyn_dh_fpu.state_used));
-				cache_addb(1);
-#else // X86_64
 				opcode(7).setabsaddr(&dyn_dh_fpu.host_cw).Emit8(0xD9); // FNSTCW [&fpu.host_cw]
 				opcode(4).setabsaddr(&dyn_dh_fpu.state).Emit8(0xDD); // FRSTOR [&fpu.state]
 				opcode(0).setimm(1,1).setabsaddr(&dyn_dh_fpu.state_used).Emit8(0xC6); // mov byte[], imm8
-#endif
 				dyn_synchstate(&save_info[sct].state);
 				gen_create_jump(save_info[sct].return_pos);
 				break;
@@ -462,286 +449,6 @@ static void dyn_write_word_release(DynReg * addr,DynReg * val,bool dword) {
 }
 
 #else
-#if C_TARGETCPU == X86
-
-static void dyn_check_bool_exception_ne(void) {
-	save_info[used_save_info].branch_pos = gen_create_branch_long(BR_Z);
-	dyn_savestate(&save_info[used_save_info].state);
-	if (!decode.cycles) {
-		++decode.cycles;
-	}
-	save_info[used_save_info].cycles = decode.cycles;
-	save_info[used_save_info].eip_change = decode.op_start - decode.code_start;
-	if (!cpu.code.big)
-		save_info[used_save_info].eip_change &= 0xffff;
-	save_info[used_save_info].type = db_exception;
-	++used_save_info;
-}
-
-static void dyn_read_intro(DynReg * addr,bool release_addr=true) {
-	gen_protectflags();
-
-	if (addr->genreg) {
-		// addr already in a register
-		uint8_t reg_idx=(uint8_t)addr->genreg->index;
-		x86gen.regs[X86_REG_ECX]->Clear();
-		if (reg_idx!=1) {
-			cache_addw(0xc88b+(reg_idx<<8));	//Mov ecx,reg
-		}
-		x86gen.regs[X86_REG_EAX]->Clear();
-		if (release_addr) gen_releasereg(addr);
-	} else {
-		// addr still in memory, directly move into ecx
-		x86gen.regs[X86_REG_EAX]->Clear();
-		x86gen.regs[X86_REG_ECX]->Clear();
-		cache_addw(0x0d8b);		//Mov ecx,[data]
-		cache_addd((uint32_t)addr->data);
-	}
-	x86gen.regs[X86_REG_EDX]->Clear();
-
-	cache_addw(0xc18b);		// mov eax,ecx
-}
-
-static bool mem_readb_checked_dcx86(PhysPt address) {
-	return get_tlb_readhandler(address)->readb_checked(address, (uint8_t*)(&core_dyn.readdata));
-}
-
-static void dyn_read_byte(DynReg * addr,DynReg * dst,bool high,bool release=false) {
-	dyn_read_intro(addr,release);
-
-	cache_addw(0xe8c1);		// shr eax,0x0c
-	cache_addb(0x0c);
-	cache_addw(0x048b);		// mov eax,paging.tlb.read[eax*TYPE uint32_t]
-	cache_addb(0x85);
-	cache_addd((uint32_t)(&paging.tlb.read[0]));
-	cache_addw(0xc085);		// test eax,eax
-	const uint8_t* je_loc=gen_create_branch(BR_Z);
-
-
-	cache_addw(0x048a);		// mov al,[eax+ecx]
-	cache_addb(0x08);
-
-	const uint8_t* jmp_loc=gen_create_jump();
-	gen_fill_branch(je_loc);
-	cache_addb(0x51);		// push ecx
-	cache_addb(0xe8);
-	cache_addd(((uint32_t)&mem_readb_checked_dcx86) - (uint32_t)cache.pos-4);
-	cache_addw(0xc483);		// add esp,4
-	cache_addb(0x04);
-	cache_addw(0x012c);		// sub al,1
-
-	dyn_check_bool_exception_ne();
-
-	cache_addw(0x058a);		//mov al,[]
-	cache_addd((uint32_t)(&core_dyn.readdata));
-
-	gen_fill_jump(jmp_loc);
-
-	x86gen.regs[X86_REG_EAX]->notusable=true;
-	GenReg * genreg=FindDynReg(dst);
-	x86gen.regs[X86_REG_EAX]->notusable=false;
-	cache_addw(0xc08a+(genreg->index<<11)+(high?0x2000:0));
-	dst->flags|=DYNFLG_CHANGED;
-}
-
-static bool mem_readd_checked_dcx86(PhysPt address) {
-	if ((address & 0xfff)<0xffd) {
-		HostPt tlb_addr=get_tlb_read(address);
-		if (tlb_addr) {
-			core_dyn.readdata=host_readd(tlb_addr+address);
-			return false;
-		} else {
-			return get_tlb_readhandler(address)->readd_checked(address, (uint32_t*)&core_dyn.readdata);
-		}
-	} else return mem_unalignedreadd_checked(address, (uint32_t*)&core_dyn.readdata);
-}
-
-static bool mem_readw_checked_dcx86(PhysPt address) {
-	if ((address & 0xfff)<0xfff) {
-		HostPt tlb_addr=get_tlb_read(address);
-		if (tlb_addr) {
-			*(uint16_t*)&core_dyn.readdata=host_readw(tlb_addr+address);
-			return false;
-		} else {
-			return get_tlb_readhandler(address)->readw_checked(address, (uint16_t*)&core_dyn.readdata);
-		}
-	} else return mem_unalignedreadw_checked(address, (uint16_t*)&core_dyn.readdata);
-}
-
-static void dyn_read_word(DynReg * addr,DynReg * dst,bool dword,bool release=false) {
-	dyn_read_intro(addr,release);
-
-	if (!dword) {
-		x86gen.regs[X86_REG_EAX]->notusable=true;
-		x86gen.regs[X86_REG_ECX]->notusable=true;
-	}
-	GenReg * genreg=FindDynReg(dst,dword);
-	if (!dword) {
-		x86gen.regs[X86_REG_EAX]->notusable=false;
-		x86gen.regs[X86_REG_ECX]->notusable=false;
-	}
-
-	cache_addw(0xc8c1);     // ror eax, 12
-	cache_addb(0x0c);
-	cache_addb(0x3d);       // cmp eax, 0xFFD00000/0xFFF00000
-	cache_addd(dword ? 0xffd00000:0xfff00000);
-	const uint8_t* jb_loc1=gen_create_branch(BR_NB);
-	cache_addb(0x25);       // and eax, 0x000FFFFF
-	cache_addd(0x000fffff);
-	cache_addw(0x048b);		// mov eax,paging.tlb.read[eax*TYPE uint32_t]
-	cache_addb(0x85);
-	cache_addd((uint32_t)(&paging.tlb.read[0]));
-	cache_addw(0xc085);		// test eax,eax
-	const uint8_t* je_loc=gen_create_branch(BR_Z);
-
-	if (!dword) cache_addb(0x66);
-	cache_addw(0x048b+(genreg->index <<(8+3)));		// mov dest,[eax+ecx]
-	cache_addb(0x08);
-
-	const uint8_t* jmp_loc=gen_create_jump();
-	gen_fill_branch(jb_loc1);
-	gen_fill_branch(je_loc);
-
-	if (!dword) {
-		cache_addw(0x0589+(genreg->index<<11));   // mov [core_dyn.readdata], dst
-		cache_addd((uint32_t)&core_dyn.readdata);
-	}
-	cache_addb(0x51);		// push ecx
-	cache_addb(0xe8);
-	if (dword) cache_addd(((uint32_t)&mem_readd_checked_dcx86) - (uint32_t)cache.pos-4);
-	else cache_addd(((uint32_t)&mem_readw_checked_dcx86) - (uint32_t)cache.pos-4);
-	cache_addw(0xc483);		// add esp,4
-	cache_addb(0x04);
-	cache_addw(0x012c);		// sub al,1
-
-	dyn_check_bool_exception_ne();
-
-	gen_mov_host(&core_dyn.readdata,dst,4);
-	dst->flags|=DYNFLG_CHANGED;
-
-	gen_fill_jump(jmp_loc);
-}
-
-static void dyn_write_intro(DynReg * addr,bool release_addr=true) {
-	gen_protectflags();
-
-	if (addr->genreg) {
-		// addr in a register
-		uint8_t reg_idx_addr=(uint8_t)addr->genreg->index;
-
-		x86gen.regs[X86_REG_EAX]->Clear();
-		x86gen.regs[X86_REG_EAX]->notusable=true;
-		x86gen.regs[X86_REG_ECX]->Clear();
-		x86gen.regs[X86_REG_ECX]->notusable=true;
-
-		if (reg_idx_addr) {
-			// addr!=eax
-			cache_addb(0x8b);		//Mov eax,reg
-			cache_addb(0xc0+reg_idx_addr);
-		}
-		if (release_addr) gen_releasereg(addr);
-	} else {
-		// addr still in memory, directly move into eax
-		x86gen.regs[X86_REG_EAX]->Clear();
-		x86gen.regs[X86_REG_EAX]->notusable=true;
-		x86gen.regs[X86_REG_ECX]->Clear();
-		x86gen.regs[X86_REG_ECX]->notusable=true;
-		cache_addb(0xa1);		//Mov eax,[data]
-		cache_addd((uint32_t)addr->data);
-	}
-
-	cache_addw(0xc88b);		// mov ecx,eax
-}
-
-static void dyn_write_byte(DynReg * addr,DynReg * val,bool high,bool release=false) {
-	dyn_write_intro(addr,release);
-
-	GenReg * genreg=FindDynReg(val);
-	cache_addw(0xe9c1);		// shr ecx,0x0c
-	cache_addb(0x0c);
-	cache_addw(0x0c8b);		// mov ecx,paging.tlb.write[ecx*TYPE uint32_t]
-	cache_addb(0x8d);
-	cache_addd((uint32_t)(&paging.tlb.write[0]));
-	cache_addw(0xc985);		// test ecx,ecx
-	const uint8_t* je_loc=gen_create_branch(BR_Z);
-
-	cache_addw(0x0488+(genreg->index<<11)+(high?0x2000:0));		// mov [eax+ecx],reg
-	cache_addb(0x08);
-
-	const uint8_t* jmp_loc=gen_create_jump();
-	gen_fill_branch(je_loc);
-
-	cache_addb(0x52);	// push edx
-	if (high) {
-		cache_addw(0xe086 + ((genreg->index + (genreg->index << 3)) << 8));
-	}
-	cache_addb(0x50 + genreg->index);
-	cache_addb(0x50); // push eax
-	if (high) {
-		cache_addw(0xe086 + ((genreg->index + (genreg->index << 3)) << 8));
-	}
-	cache_addb(0xe8);
-	cache_addd(((uint32_t)&mem_writeb_checked) - (uint32_t)cache.pos-4);
-	cache_addw(0xc483);		// add esp,8
-	cache_addb(0x08);
-	cache_addw(0x012c);		// sub al,1
-	cache_addb(0x5a);		// pop edx
-
-	// Restore registers to be used again
-	x86gen.regs[X86_REG_EAX]->notusable=false;
-	x86gen.regs[X86_REG_ECX]->notusable=false;
-
-	dyn_check_bool_exception_ne();
-
-	gen_fill_jump(jmp_loc);
-}
-
-static void dyn_write_word(DynReg * addr,DynReg * val,bool dword,bool release=false) {
-	dyn_write_intro(addr,release);
-
-	GenReg * genreg=FindDynReg(val);
-	cache_addw(0xc9c1);     // ror ecx, 12
-	cache_addb(0x0c);
-	cache_addw(0xf981);     // cmp ecx, 0xFFD00000/0xFFF00000
-	cache_addd(dword ? 0xffd00000:0xfff00000);
-	const uint8_t* jb_loc1=gen_create_branch(BR_NB);
-	cache_addw(0xe181);     // and ecx, 0x000FFFFF
-	cache_addd(0x000fffff);
-	cache_addw(0x0c8b);		// mov ecx,paging.tlb.write[ecx*TYPE uint32_t]
-	cache_addb(0x8d);
-	cache_addd((uint32_t)(&paging.tlb.write[0]));
-	cache_addw(0xc985);		// test ecx,ecx
-	const uint8_t* je_loc=gen_create_branch(BR_Z);
-
-	if (!dword) cache_addb(0x66);
-	cache_addw(0x0489+(genreg->index <<(8+3)));		// mov [eax+ecx],reg
-	cache_addb(0x08);
-
-	const uint8_t* jmp_loc=gen_create_jump();
-	gen_fill_branch(jb_loc1);
-	gen_fill_branch(je_loc);
-
-	cache_addb(0x52);	// push edx
-	cache_addb(0x50+genreg->index);
-	cache_addb(0x50);	// push eax
-	cache_addb(0xe8);
-	if (dword) cache_addd(((uint32_t)&mem_writed_checked) - (uint32_t)cache.pos-4);
-	else cache_addd(((uint32_t)&mem_writew_checked) - (uint32_t)cache.pos-4);
-	cache_addw(0xc483);		// add esp,8
-	cache_addb(0x08);
-	cache_addw(0x012c);		// sub al,1
-	cache_addb(0x5a);		// pop edx
-
-	// Restore registers to be used again
-	x86gen.regs[X86_REG_EAX]->notusable=false;
-	x86gen.regs[X86_REG_ECX]->notusable=false;
-
-	dyn_check_bool_exception_ne();
-
-	gen_fill_jump(jmp_loc);
-}
-
-#else // X86_64
 static bool mem_readd_checked_dcx64(PhysPt address, uint32_t* dst) {
 	return get_tlb_readhandler(address)->readd_checked(address, dst);
 }
@@ -780,7 +487,7 @@ static void dyn_read_word(DynReg * addr,DynReg * dst,bool dword,bool release=fal
 	dyn_savestate(&callstate);
 
 	const uint8_t *page_brk;
-	opcode(tmp).set64().setea(gensrc->index,-1,0,dword?3:1).Emit8(0x8D); // lea tmp, [dst+(dword?3:1)]
+	opcode(tmp).set64().setea(gensrc->index, -1, 0, dword ? 3 : 1).Emit8(0x8D); // lea tmp, [dst+(dword?3:1)] //-V807
 	if (dword) {
 		opcode(4).set64().setimm(~0xFFF,4).setrm(tmp).Emit8(0x81); // and tmp, ~0xFFF
 		opcode(gensrc->index).set64().setrm(tmp).Emit8(0x39); // cmp tmp,src
@@ -842,7 +549,7 @@ static void dyn_read_byte(DynReg * addr,DynReg * dst,bool high,bool release=fals
 	opcode(tmp).setrm(gensrc->index).Emit8(0x8B); // mov tmp, src
 	opcode(5).setrm(tmp).setimm(12,1).Emit8(0xC1); // shr tmp,12
 	// mov tmp, [8*tmp+paging.tlb.read(rbp)]
-	opcode(tmp)
+	opcode(tmp) //-V807
 	        .set64()
 	        .setea(5, tmp, 3, (Bits)PAGING_GetReadBaseAddress() - (Bits)&cpu_regs)
 	        .Emit8(0x8B);
@@ -890,7 +597,7 @@ static void dyn_write_word(DynReg * addr,DynReg * val,bool dword,bool release=fa
 	dyn_savestate(&callstate);
 
 	const uint8_t *page_brk;
-	opcode(tmp).set64().setea(gendst->index,-1,0,dword?3:1).Emit8(0x8D); // lea tmp, [dst+(dword?3:1)]
+	opcode(tmp).set64().setea(gendst->index, -1, 0, dword ? 3 : 1).Emit8(0x8D); // lea tmp, [dst+(dword?3:1)] //-V807
 	if (dword) {
 		opcode(4).set64().setimm(~0xFFF,4).setrm(tmp).Emit8(0x81); // and tmp, ~0xFFF
 		opcode(gendst->index).set64().setrm(tmp).Emit8(0x39); // cmp tmp,dst
@@ -946,7 +653,7 @@ static void dyn_write_byte(DynReg * addr,DynReg * val,bool high,bool release=fal
 	opcode(tmp).setrm(gendst->index).Emit8(0x8B); // mov tmpd, dst
 	opcode(5).setrm(tmp).setimm(12,1).Emit8(0xC1); // shr tmpd,12
 	// mov tmp, [8*tmp+paging.tlb.write(rbp)]
-	opcode(tmp)
+	opcode(tmp) //-V807
 	        .set64()
 	        .setea(5, tmp, 3, (Bits)PAGING_GetWriteBaseAddress() - (Bits)&cpu_regs)
 	        .Emit8(0x8B);
@@ -976,7 +683,6 @@ static void dyn_write_byte(DynReg * addr,DynReg * val,bool high,bool release=fal
 	gen_fill_short_jump(jmp_loc);
 }
 
-#endif
 static void dyn_read_word_release(DynReg * addr,DynReg * dst,bool dword) {
 	dyn_read_word(addr,dst,dword,addr!=dst);
 }
@@ -1168,8 +874,8 @@ skip_extend_word:
 							if (reg_ea!=DREG(EA)) gen_releasereg(DREG(EA));
 							return;
 						}
-						imm=(int32_t)val;
-					}
+					        imm = (int32_t)val; //-V220
+				        }
 					break;
 				case 6:base=DREG(ESI);segbase=DREG(DS);break;
 				case 7:base=DREG(EDI);segbase=DREG(DS);break;
@@ -1212,8 +918,8 @@ skip_extend_word:
 				if (reg_ea!=DREG(EA)) gen_releasereg(DREG(EA));
 				return;
 			}
-			
-			imm=(int32_t)val;
+
+			imm = (int32_t)val; //-V220
 			break;
 			}
 		}
@@ -1673,7 +1379,7 @@ static void dyn_grp2_ev(grp2_types type) {
 			gen_releasereg(DREG(TMPB));
 			break;
 		}
-		uint8_t imm=(uint8_t)val;
+		const auto imm = static_cast<uint8_t>(val);
 		if (imm) {
 			/* rotates (first 4 ops) alter cf/of only; shifts (last 4 ops) alter all flags */
 			if (decode.modrm.reg < 4) gen_needflags();
@@ -1823,7 +1529,7 @@ static void dyn_load_seg_off_ea(SegNames seg) {
 
 static void dyn_mov_seg_ev(void) {
 	dyn_get_modrm();
-	SegNames seg=(SegNames)decode.modrm.reg;
+	const auto seg = static_cast<SegNames>(decode.modrm.reg);
 	if (seg == cs) {
 		IllegalOption("dyn_mov_seg_ev");
 	}
@@ -2211,13 +1917,13 @@ static CacheBlock * CreateCacheBlock(CodePageHandler * codepage,PhysPt start,Bit
 	decode.block->page.start=decode.page.index;
 	codepage->AddCacheBlock(decode.block);
 
-	auto cache_addr = static_cast<void *>(
-	        const_cast<uint8_t *>(decode.block->cache.start));
+	auto cache_addr = static_cast<void*>(
+	        const_cast<uint8_t*>(decode.block->cache.start)); //-V2018
 	constexpr size_t cache_bytes = CACHE_MAXSIZE;
 
 	dyn_mem_write(cache_addr, cache_bytes);
 	for (i = 0; i < G_MAX; i++) {
-		DynRegs[i].flags&=~(DYNFLG_ACTIVE|DYNFLG_CHANGED);
+		DynRegs[i].flags &= ~(DYNFLG_ACTIVE | DYNFLG_CHANGED); //-V784
 		DynRegs[i].genreg=nullptr;
 	}
 	gen_reinit();

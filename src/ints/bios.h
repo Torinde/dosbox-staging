@@ -6,7 +6,11 @@
 
 #include "dosbox.h"
 
+#include "config/setup.h"
+
 #include <optional>
+
+#include "config/setup.h"
 
 #define BIOS_BASE_ADDRESS_COM1          0x400
 #define BIOS_BASE_ADDRESS_COM2          0x402
@@ -110,6 +114,8 @@ constexpr uint8_t MAX_SCAN_CODE = 115;
 
 //#define MAX_SWAPPABLE_DISKS 20
 
+void BIOS_Init(Section* sec);
+
 void BIOS_ZeroExtendedSize(bool in);
 void char_out(uint8_t chr,uint32_t att,uint8_t page);
 void INT10_StartUp(void);
@@ -118,6 +124,9 @@ void INT2A_StartUp(void);
 void INT2F_StartUp(void);
 void INT33_StartUp(void);
 void INT13_StartUp(void);
+
+void BIOS_Init();
+void BIOS_Destroy();
 
 bool BIOS_AddKeyToBuffer(uint16_t code);
 

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText:  2020-2025 The DOSBox Staging Team
+// SPDX-FileCopyrightText:  2020-2026 The DOSBox Staging Team
 // SPDX-FileCopyrightText:  2002-2021 The DOSBox Team
 // SPDX-License-Identifier: GPL-2.0-or-later
 
@@ -9,12 +9,12 @@
 #include "dosbox.h"
 #include "cpu/callback.h"
 #include "cpu/registers.h"
+#include "dev_con.h"
+#include "dos.h"
+#include "dos/drives.h"
 #include "hardware/memory.h"
 #include "ints/bios.h"
-#include "dos_inc.h"
 #include "misc/support.h"
-#include "dos/drives.h"
-#include "dev_con.h"
 
 DOS_Device * Devices[DOS_DEVICES];
 
@@ -116,7 +116,7 @@ bool DOS_ExtDevice::Read(uint8_t *data, uint16_t *size)
 	PhysPt bufptr = (dos.dcp << 4) | 32;
 	for (uint16_t no = 0; no < *size; no++) {
 		// INPUT
-		if ((CallDeviceFunction(4, 26, bufptr, 1) & 0x8000)) {
+		if (CallDeviceFunction(4, 26, bufptr, 1) & 0x8000) {
 			return false;
 		} else {
 			if (real_readw(dos.dcp, 18) != 1) {
@@ -134,7 +134,7 @@ bool DOS_ExtDevice::Write(uint8_t *data, uint16_t *size)
 	for (uint16_t no = 0; no < *size; no++) {
 		mem_writeb(bufptr, *data);
 		// OUTPUT
-		if ((CallDeviceFunction(8, 26, bufptr, 1) & 0x8000)) {
+		if (CallDeviceFunction(8, 26, bufptr, 1) & 0x8000) {
 			return false;
 		} else {
 			if (real_readw(dos.dcp, 18) != 1) {
@@ -246,7 +246,7 @@ static void DOS_CheckOpenExtDevice(const char *name)
 	uint32_t addr;
 
 	if ((addr = DOS_CheckExtDevice(name, true)) != 0) {
-		DOS_ExtDevice *device = new DOS_ExtDevice(name, addr >> 16, addr & 0xffff);
+		auto device = new DOS_ExtDevice(name, addr >> 16, addr & 0xffff);
 		DOS_AddDevice(device);
 	}
 }
@@ -384,7 +384,8 @@ uint8_t DOS_FindDevice(const char* name)
 	for (int index = DOS_DEVICES - 1; index >= 0; index--) {
 		if (Devices[index]) {
 			if (Devices[index]->GetInformation() & EXT_DEVICE_BIT) {
-				if (WildFileCmp(name_part, Devices[index]->name.c_str())) {
+				if (wild_file_cmp(name_part,
+				                  Devices[index]->name.c_str())) {
 					if (DOS_CheckExtDevice(name_part, false) != 0) {
 						return index;
 					} else {
@@ -412,8 +413,9 @@ uint8_t DOS_FindDevice(const char* name)
 	/* loop through devices */
 	for(uint8_t index = 0;index < DOS_DEVICES;index++) {
 		if (Devices[index]) {
-			if (WildFileCmp(name_part, Devices[index]->GetName()))
+			if (wild_file_cmp(name_part, Devices[index]->GetName())) {
 				return index;
+			}
 		}
 	}
 	return DOS_DEVICES;
@@ -532,7 +534,7 @@ bool DOS_DeviceHasName(const RealPt rp, const std::string_view req_name)
 
 	std::string device_name = {};
 	for (size_t i = 0; i < DeviceDriverInfo::name_length; ++i) {
-		const char c = static_cast<char>(real_readb(segment, check_cast<uint16_t>(offset + i)));
+		const auto c = static_cast<char>(real_readb(segment, check_cast<uint16_t>(offset + i)));
 
 		// Device name should be padded with spaces if it is less than name length (8 characters)
 		// Also stop reading upon encountering a null termination or control codes to be safe

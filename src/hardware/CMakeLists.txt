@@ -1,23 +1,29 @@
-target_sources(libdosboxcommon PRIVATE 
+target_sources(dosboxcommon PRIVATE 
   audio/adlib_gold.cpp
+  audio/cms.cpp
   audio/covox.cpp
   audio/disney.cpp
-  audio/gameblaster.cpp
   audio/gus.cpp
   audio/imfc.cpp
   audio/innovation.cpp
   audio/lpt_dac.cpp
+  audio/mame/saa1099.cpp
+  audio/mame/sn76496.cpp
+  audio/mpu401.cpp
   audio/opl.cpp
   audio/pcspeaker.cpp
   audio/pcspeaker_discrete.cpp
   audio/pcspeaker_impulse.cpp
+  audio/pcspeaker_pit.cpp
   audio/ps1audio.cpp
-  audio/sblaster.cpp
+  audio/soundblaster.cpp
+  audio/speaker.cpp
   audio/ston1_dac.cpp
   audio/tandy_sound.cpp
 
   input/intel8042.cpp
   input/intel8255.cpp
+  input/joystick.cpp
   input/keyboard.cpp
   input/keyboard_scancodes.cpp
   input/mouse.cpp
@@ -30,15 +36,10 @@ target_sources(libdosboxcommon PRIVATE
   input/mouseif_ps2_bios.cpp
   input/mouseif_virtual_machines.cpp
 
-  mame/saa1099.cpp
-  mame/sn76496.cpp
+  network/ipx.cpp
+  network/ipxserver.cpp
+  network/ne2000.cpp
 
-  reelmagic/driver.cpp
-  reelmagic/player.cpp
-  reelmagic/video_mixer.cpp
-
-  serialport/directserial.cpp
-  serialport/libserial.cpp
   serialport/misc_util.cpp
   serialport/nullmodem.cpp
   serialport/serialdummy.cpp
@@ -46,6 +47,9 @@ target_sources(libdosboxcommon PRIVATE
   serialport/serialport.cpp
   serialport/softmodem.cpp
 
+  video/reelmagic/driver.cpp
+  video/reelmagic/player.cpp
+  video/reelmagic/video_mixer.cpp
   video/vga.cpp
   video/vga_attr.cpp
   video/vga_crtc.cpp
@@ -65,30 +69,29 @@ target_sources(libdosboxcommon PRIVATE
   cmos.cpp
   dma.cpp
   ide.cpp
-  iohandler.cpp
-  ipx.cpp
-  ipxserver.cpp
-  joystick.cpp
   memory.cpp
-  mpu401.cpp
-  ne2000.cpp
   pci_bus.cpp
   pic.cpp
+  port.cpp
   timer.cpp
   virtualbox.cpp
   vmware.cpp
 )
 
-target_sources(dosbox PRIVATE iohandler_containers.cpp)
+target_sources(dosbox PRIVATE port_containers.cpp)
 
-target_link_libraries(libdosboxcommon PRIVATE
-  libesfmu
-  libresidfp
-  libym7128bemu
-  libtalchorus
-  $<IF:$<BOOL:${C_MANYMOUSE}>,libmanymouse,>
-  libnuked
+target_link_libraries(dosboxcommon PRIVATE
+  enet
+  esfmu
+  residfp
+  ym7128bemu
+  riffcpp
+  talchorus
+  nuked
+  plmpeg
   PkgConfig::SPEEXDSP
-  $<IF:$<TARGET_EXISTS:SDL2_net::SDL2_net>,SDL2_net::SDL2_net,SDL2_net::SDL2_net-static>
 )
 
+if (C_MANYMOUSE)
+  target_link_libraries(dosboxcommon PRIVATE manymouse)
+endif()

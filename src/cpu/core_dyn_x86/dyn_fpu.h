@@ -1,12 +1,10 @@
-// SPDX-FileCopyrightText:  2002-2021 The DOSBox Team
+// SPDX-FileCopyrightText:  2002-2025 The DOSBox Team
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #ifndef DOSBOX_DYN_FPU_H
 #define DOSBOX_DYN_FPU_H
 
 #include "dosbox.h"
-
-#if C_FPU
 
 #include "cpu/cpu.h"
 #include "misc/cross.h"
@@ -162,6 +160,8 @@ static void dyn_fpu_esc1()
 				break;
 			case 0x02:       /* UNKNOWN */
 			case 0x03:       /* ILLEGAL */
+			case 0x06:       /* FTSTP (cyrix)*/
+			case 0x07:       /* UNKNOWN */
 				FPU_LOG_WARN(1,false,group,sub);
 				break;
 			case 0x04:       /* FTST */
@@ -169,10 +169,6 @@ static void dyn_fpu_esc1()
 				break;
 			case 0x05:       /* FXAM */
 				gen_call_function((void*)&FPU_FXAM,"");
-				break;
-			case 0x06:       /* FTSTP (cyrix)*/
-			case 0x07:       /* UNKNOWN */
-				FPU_LOG_WARN(1,false,group,sub);
 				break;
 			}
 			break;
@@ -182,7 +178,7 @@ static void dyn_fpu_esc1()
 				gen_call_function((void*)&FPU_FLD1,"");
 				break;
 			case 0x01:       /* FLDL2T */
-				gen_call_function((void*)&FPU_FLDL2T,"");
+				gen_call_function((void*)&FPU_FLDL2T, ""); //-V1037
 				break;
 			case 0x02:       /* FLDL2E */
 				gen_call_function((void*)&FPU_FLDL2E,"");
@@ -658,6 +654,4 @@ static void dyn_fpu_esc7()
 	}
 }
 
-#endif // C_FPU
-
-#endif
+#endif // DOSBOX_DYN_FPU_H

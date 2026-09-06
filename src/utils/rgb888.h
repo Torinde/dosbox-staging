@@ -1,10 +1,12 @@
-// SPDX-FileCopyrightText:  2021-2025 The DOSBox Staging Team
+// SPDX-FileCopyrightText:  2021-2026 The DOSBox Staging Team
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #ifndef DOSBOX_RGB888_H
 #define DOSBOX_RGB888_H
 
 #include <cstdint>
+#include <optional>
+#include <string_view>
 
 #include "misc/support.h"
 
@@ -34,12 +36,6 @@ public:
 		return (red == that.red && green == that.green && blue == that.blue);
 	}
 
-	constexpr bool operator!=(const Rgb888& that) const
-	{
-		return !operator==(that);
-	}
-
-	// Scoped conversion helpers
 	static constexpr Rgb888 FromRgb444(const uint8_t r4, const uint8_t g4,
 	                                   const uint8_t b4)
 	{
@@ -55,6 +51,8 @@ public:
 
 		return Rgb888(r8, g8, b8);
 	}
+
+	static std::optional<Rgb888> FromHexString(std::string_view hex_str);
 };
 
 #endif

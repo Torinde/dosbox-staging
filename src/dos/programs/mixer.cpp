@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText:  2023-2025 The DOSBox Staging Team
+// SPDX-FileCopyrightText:  2023-2026 The DOSBox Staging Team
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include "mixer.h"
@@ -719,8 +719,8 @@ ChannelInfos::ChannelInfos(const ChannelInfosMap& channel_infos)
 
 	features_by_channel_name[ChannelName::Master] = {ChannelFeature::Stereo};
 
-	features_by_channel_name.insert(channel_infos.begin(),
-	                                channel_infos.end()); //-V837
+	features_by_channel_name.insert(channel_infos.begin(), //-V837
+	                                channel_infos.end());
 }
 
 bool ChannelInfos::HasChannel(const std::string& _channel_name) const
@@ -750,7 +750,9 @@ void MIXER::Run()
 		return;
 	}
 	if (cmd->FindExist("/LISTMIDI")) {
-		MIDI_ListDevices(this);
+		MoreOutputStrings output(*this);
+		MIDI_ListDevices(output);
+		output.Display();
 		return;
 	}
 

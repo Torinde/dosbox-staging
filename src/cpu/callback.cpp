@@ -52,20 +52,29 @@ void CALLBACK_DeAllocate(callback_number_t cb_num)
 	Callback_Handlers[cb_num] = &illegal_handler;
 }
 
-void CALLBACK_Idle() {
-/* this makes the cpu execute instructions to handle irq's and then come back */
-	const auto oldIF = GETFLAG(IF);
-	SETFLAGBIT(IF,true);
-	uint16_t oldcs=SegValue(cs);
-	uint32_t oldeip=reg_eip;
-	SegSet16(cs,CB_SEG);
-	reg_eip=CB_SOFFSET+call_idle*CB_SIZE;
+[[nodiscard]] bool CALLBACK_Idle()
+{
+	// This makes the CPU execute instructions to handle IRQ's and then come
+	// back
+	const auto old_if = GETFLAG(IF);
+	SETFLAGBIT(IF, true);
+
+	const uint16_t old_cs  = SegValue(cs);
+	const uint32_t old_eip = reg_eip;
+	SegSet16(cs, CB_SEG);
+	reg_eip = CB_SOFFSET + call_idle * CB_SIZE;
+
 	DOSBOX_RunMachine();
-	reg_eip=oldeip;
-	SegSet16(cs,oldcs);
-	SETFLAGBIT(IF,oldIF);
-	if (!CPU_CycleAutoAdjust && CPU_Cycles>0)
-		CPU_Cycles=0;
+
+	reg_eip = old_eip;
+	SegSet16(cs, old_cs);
+	SETFLAGBIT(IF, old_if);
+
+	if (!CPU_CycleAutoAdjust && CPU_Cycles > 0) {
+		CPU_Cycles = 0;
+	}
+
+	return DOSBOX_IsShutdownRequested();
 }
 
 static Bitu default_handler()
@@ -629,7 +638,8 @@ void CALLBACK_HandlerObject::Set_RealVec(uint8_t vec){
 	} else E_Exit ("double usage of vector handler");
 }
 
-void CALLBACK_Init(Section* /*sec*/) {
+void CALLBACK_Init()
+{
 	for (callback_number_t i = 0; i < CB_MAX; ++i) {
 		Callback_Handlers[i]=&illegal_handler;
 	}

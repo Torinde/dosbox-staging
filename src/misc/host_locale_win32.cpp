@@ -90,6 +90,8 @@ static const std::unordered_map<std::string, KeyboardLayoutMaybeCodepage> WinToD
 	// Canadian (dual-layer, QWERTY)
 	{ "00000c0c", { "cf445" }      }, // Canadian French (Legacy)
 	{ "00011009", { "cf445" }      }, // Canadian Multilingual Standard
+	// Croatian (QWERTZ)
+	{ "0000041a", { "hr" }         }, // Croatian
 	// Czech (QWERTZ)
 	{ "00000405", { "cz" }         }, // Czech
 	// Czech (programmers, QWERTY)
@@ -225,7 +227,6 @@ static const std::unordered_map<std::string, KeyboardLayoutMaybeCodepage> WinToD
 	{ "0000046e", { "sf" }         }, // Luxembourgish
 	// Slovenian (QWERTZ)
 	{ "00000424", { "si" }         }, // Slovenian
-	{ "0000041a", { "si" }         }, // Standard
 	// Slovak (QWERTZ)
 	{ "0000041b", { "sk" }         }, // Slovak
 	// Albanian (deadkeys, QWERTZ)
@@ -466,12 +467,13 @@ static HostLocaleElement get_dos_country()
 
 	result.log_info = locale_name;
 
-	const auto tokens = split(locale_name, "-");
-	if (tokens.size() < 2) {
+	const auto country_code = LanguageTerritory(locale_name).GetDosCountryCode();
+	if (!country_code) {
+		// Country not recognized
 		return {};
 	}
 
-	result.country_code = iso_to_dos_country(tokens[0], tokens[1]);
+	result.country_code = country_code;
 	return result;
 }
 
@@ -532,25 +534,20 @@ static HostLanguages get_host_languages()
 {
 	HostLanguages result = {};
 
-	auto get_language_file = [&](const std::string& input) -> std::string {
-		const auto tokens = split(input, "-");
-		if (tokens.empty()) {
-			return {};
+	auto try_add_app_language = [&](const std::string& input) {
+		const auto language = LanguageTerritory(input);
+		if (!language.IsEmpty()) {
+			result.app_languages.push_back(language);
 		}
-		if (tokens.size() == 1) {
-			return iso_to_language_file(tokens.at(0), "");
-		}
-		return iso_to_language_file(tokens.at(0), tokens.at(1));
 	};
 
-	// Get the list of preferred languages
+	// Get the list of preferred application languages
 	for (const auto& entry : get_preferred_languages()) {
 		if (!result.log_info.empty()) {
 			result.log_info += ", ";
 		}
 		result.log_info += entry;
-
-		result.language_files.push_back(get_language_file(entry));
+		try_add_app_language(entry);
 	}
 
 	// Get the default GUI language
@@ -564,14 +561,17 @@ static HostLanguages get_host_languages()
 	}
 
 	const auto language_territory = to_string(&buffer[0], LOCALE_NAME_MAX_LENGTH);
+	const auto gui_language = LanguageTerritory(language_territory);
+	if (!gui_language.IsEmpty()) {
+		if (!result.log_info.empty()) {
+			result.log_info += "; ";
+		}
+		result.log_info += "GUI: ";
+		result.log_info += language_territory;
 
-	if (!result.log_info.empty()) {
-		result.log_info += "; ";
+		result.gui_languages = {gui_language};
 	}
-	result.log_info += "GUI: ";
-	result.log_info += language_territory;
 
-	result.language_file_gui = get_language_file(language_territory);
 	return result;
 }
 

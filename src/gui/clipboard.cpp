@@ -4,12 +4,14 @@
 #include "gui/clipboard.h"
 
 #include "config/config.h"
+#include "dosbox_config.h"
 #include "misc/logging.h"
 #include "misc/unicode.h"
 #include "utils/checks.h"
 #include "utils/string_utils.h"
 
-#include <SDL.h>
+// must be included after dosbox_config.h
+#include <SDL3/SDL.h>
 
 CHECK_NARROWING();
 
@@ -56,7 +58,7 @@ static void maybe_fetch_text_from_host()
 	bool has_host_content_changed = false;
 	std::string new_host_text = {};
 
-	if (SDL_FALSE == SDL_HasClipboardText()) {
+	if (!SDL_HasClipboardText()) {
 		// Host has no text in the clipboard
 		if (!clipboard.host_text_utf8.empty()) {
 			has_host_content_changed = true;
@@ -89,7 +91,7 @@ static void maybe_push_text_to_host()
 	const auto converted = replace_eol(clipboard.text_utf8, host_eol());
 
 	// Paste text to the clipboard
-	if (0 != SDL_SetClipboardText(converted.c_str())) {
+	if (!SDL_SetClipboardText(converted.c_str())) {
 		LOG_WARNING("SDL: Clipboard error '%s'", SDL_GetError());
 	} else {
 		clipboard.host_text_utf8 = clipboard.text_utf8;

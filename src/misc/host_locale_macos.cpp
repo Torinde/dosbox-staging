@@ -1,9 +1,7 @@
-// SPDX-FileCopyrightText:  2024-2025 The DOSBox Staging Team
+// SPDX-FileCopyrightText:  2024-2026 The DOSBox Staging Team
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include "dosbox.h"
-
-#if C_COREFOUNDATION
 
 #include "host_locale.h"
 
@@ -378,7 +376,13 @@ static HostLocaleElement get_dos_country()
 
 	result.log_info = language + "-" + country;
 
-	result.country_code = iso_to_dos_country(language, country);
+	const auto country_code = LanguageTerritory(language, country).GetDosCountryCode();
+	if (!country_code) {
+		// Country not recognized
+		return {};
+	}
+
+	result.country_code = country_code;
 	return result;
 }
 
@@ -419,18 +423,7 @@ static HostLanguages get_host_languages()
 {
 	HostLanguages result = {};
 
-	auto get_language_file = [&](const std::string& input) -> std::string {
-		const auto tokens = split(input, "-");
-		if (tokens.empty()) {
-			return {};
-		}
-		if (tokens.size() == 1) {
-			return iso_to_language_file (tokens.at(0), "");
-		}
-		return iso_to_language_file(tokens.at(0), tokens.at(1));
-	};
-
-	// Get the list of preferred languages
+	// Get the list of preferred application languages
 	const auto preferred_languages = get_preferred_languages();
 	for (const auto& entry : preferred_languages) {
 		if (!result.log_info.empty()) {
@@ -438,21 +431,25 @@ static HostLanguages get_host_languages()
 		}
 		result.log_info += entry;
 
-		result.language_files.push_back(get_language_file(entry));
+		const auto language = LanguageTerritory(entry);
+		if (!language.IsEmpty()) {
+			result.app_languages.push_back(language);
+		}
 	}
 
 	// Get the GUI language
-	const auto language  = get_locale(kCFLocaleLanguageCode);
-	const auto territory = get_locale(kCFLocaleCountryCode);
+	const auto language = get_locale(kCFLocaleLanguageCode);
+	const auto country  = get_locale(kCFLocaleCountryCode);
 
-	if (!language.empty()) {
+	const auto gui_language = LanguageTerritory(language, country);
+	if (!gui_language.IsEmpty()) {
 		if (!result.log_info.empty()) {
 			result.log_info += "; ";
 		}
 		result.log_info += "GUI: ";
-		result.log_info += language + "-" + territory;
+		result.log_info += language + "-" + country;
 
-		result.language_file_gui = iso_to_language_file(language, territory);
+		result.gui_languages = {gui_language};
 	}
 
 	return result;
@@ -849,5 +846,3 @@ void StdLibLocale::DetectTimeDateFormat([[maybe_unused]] const std::locale& loca
 		date_separator = candidate_1;
 	}
 }
-
-#endif

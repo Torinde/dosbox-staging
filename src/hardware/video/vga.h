@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText:  2020-2025 The DOSBox Staging Team
+// SPDX-FileCopyrightText:  2020-2026 The DOSBox Staging Team
 // SPDX-FileCopyrightText:  2002-2021 The DOSBox Team
 // SPDX-License-Identifier: GPL-2.0-or-later
 
@@ -11,16 +11,17 @@
 #include <utility>
 
 #include "config/config.h"
+#include "config/setup.h"
 #include "hardware/port.h"
 #include "misc/video.h"
 #include "utils/bgrx8888.h"
 #include "utils/bit_view.h"
 #include "utils/fraction.h"
 #include "utils/rgb666.h"
+#include "utils/rgb888.h"
 
 //Don't enable keeping changes and mapping lfb probably...
 #define VGA_LFB_MAPPED
-//#define VGA_KEEP_CHANGES
 #define VGA_CHANGE_SHIFT	9
 
 class PageHandler;
@@ -115,14 +116,18 @@ constexpr auto NumVgaSequencerRegisters = 0x05;
 constexpr auto NumVgaGraphicsRegisters  = 0x09;
 constexpr auto NumVgaAttributeRegisters = 0x15;
 
-constexpr auto vesa_2_0_modes_start = 0x120;
+constexpr auto Vesa20ModesStart = 0x150;
 
 constexpr uint16_t EGA_HALF_CLOCK = 1 << 0;
 constexpr uint16_t EGA_LINE_DOUBLE = 1 << 1;
 constexpr uint16_t VGA_PIXEL_DOUBLE = 1 << 2;
 
+// Tags modes replaced via the 'vesa_custom_resolution' setting, only so we
+// can force square pixels for them
+constexpr uint16_t VESA_CUSTOM_RESOLUTION = 1 << 3;
+
 // Refresh rate constants
-constexpr auto RefreshRateMin        = 23;
+constexpr auto RefreshRateMin        = 24;
 constexpr auto RefreshRateDosDefault = 70;
 constexpr auto RefreshRateMax        = 1000;
 
@@ -208,7 +213,7 @@ struct VgaConfig {
 	uint32_t full_enable_and_set_reset = 0;
 };
 
-enum Drawmode { PART, DRAWLINE, EGALINE };
+enum class DrawMode { Part, Scanline, ScanlineEga };
 
 enum class VgaRateMode { Default, Custom };
 
@@ -319,7 +324,7 @@ struct VgaDraw {
 		uint8_t enabled = 0;
 	} cursor = {};
 
-	Drawmode mode       = {};
+	DrawMode mode       = {};
 	bool vret_triggered = false;
 	bool vga_override   = false;
 };
@@ -1050,10 +1055,6 @@ struct VgaType {
 	// How much delay to add to video memory I/O in nanoseconds
 	uint16_t vmem_delay_ns = 0;
 
-#ifdef VGA_KEEP_CHANGES
-	VgaChanges changes = {};
-#endif
-
 	VgaLfb lfb = {};
 
 	// Composite video mode parameters
@@ -1091,6 +1092,8 @@ void VGA_SetMonochromePalette(const enum MonochromePalette);
 void VGA_SetHerculesPalette();
 void VGA_SetMonochromeCgaPalette();
 
+Rgb888 VGA_GetBlackLevelColor();
+
 // Functions for different resolutions
 void VGA_SetMode(VGAModes mode);
 void VGA_DetermineMode(void);
@@ -1104,7 +1107,7 @@ void VGA_SetupDrawing(uint32_t val);
 void VGA_CheckScanLength(void);
 void VGA_ChangedBank(void);
 
-const VideoMode& VGA_GetCurrentVideoMode();
+VideoMode VGA_GetCurrentVideoMode();
 
 // DAC/Attribute functions
 void VGA_DAC_CombineColor(const uint8_t palette_idx, const uint8_t color_idx);
@@ -1118,9 +1121,12 @@ enum class EgaMonitorMode { Cga, Ega, Mono };
 
 void VGA_ATTR_SetEGAMonitorPalette(const EgaMonitorMode m);
 
+void VGA_Init();
+void VGA_Destroy();
+
 // The VGA subfunction startups
 void VGA_SetupAttr(void);
-void VGA_SetupMemory(Section* sec);
+void VGA_SetupMemory();
 void VGA_SetupDAC(void);
 void VGA_SetupCRTC(void);
 void VGA_SetupMisc(void);
@@ -1128,7 +1134,11 @@ void VGA_SetupGFX(void);
 void VGA_SetupSEQ(void);
 void VGA_SetupOther(void);
 void VGA_SetupXGA(void);
-void VGA_AddCompositeSettings(Config& conf);
+
+void COMPOSITE_AddConfigSection(Config& conf);
+void COMPOSITE_Init();
+
+void VGA_DestroyMemory();
 
 // Some support functions
 struct VideoModeBlock;

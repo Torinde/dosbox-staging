@@ -1,14 +1,14 @@
-// SPDX-FileCopyrightText:  2022-2025 The DOSBox Staging Team
+// SPDX-FileCopyrightText:  2022-2026 The DOSBox Staging Team
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include "more_output.h"
 
-#include "utils/ascii.h"
 #include "cpu/callback.h"
-#include "utils/checks.h"
-#include "dos/dos_inc.h"
+#include "dos/dos.h"
 #include "ints/int10.h"
 #include "shell/shell.h"
+#include "utils/ascii.h"
+#include "utils/checks.h"
 #include "utils/string_utils.h"
 
 #include <algorithm>
@@ -446,7 +446,7 @@ MoreOutputBase::UserDecision MoreOutputBase::PromptUser()
 
 MoreOutputBase::UserDecision MoreOutputBase::PromptUserIfNeeded()
 {
-	if (shutdown_requested) {
+	if (DOSBOX_IsShutdownRequested()) {
 		return UserDecision::Cancel;
 	}
 	if (screen_line_counter >= lines_to_display) {
@@ -463,8 +463,10 @@ uint32_t MoreOutputBase::GetNumLinesFromUser(UserDecision& decision)
 	WriteOut(" ");
 
 	std::string number_str = {};
-	while (!shutdown_requested) {
-		CALLBACK_Idle();
+	while (true) {
+		if (CALLBACK_Idle()) {
+			break;
+		}
 
 		// Try to read the key
 		uint16_t count = 1;
@@ -509,17 +511,20 @@ MoreOutputBase::UserDecision MoreOutputBase::WaitForCancelContinue()
 MoreOutputBase::UserDecision MoreOutputBase::WaitForCancelContinueNext()
 {
 	auto decision = UserDecision::Cancel;
-	while (!shutdown_requested) {
-		CALLBACK_Idle();
+	while (true) {
+		if (CALLBACK_Idle()) {
+			break;
+		}
 
 		// Try to read the key
 		uint16_t count = 1;
 		uint8_t  tmp   = 0;
 		DOS_ReadFile(STDIN, &tmp, &count);
-		const char code = static_cast<char>(tmp);
+		const auto code = static_cast<char>(tmp);
 
-		if (shutdown_requested || count == 0 || ciequals(code, 'q') ||
-		    code == Ascii::CtrlC || code == Ascii::Escape) {
+		if (DOSBOX_IsShutdownRequested() || count == 0 ||
+		    ciequals(code, 'q') || code == Ascii::CtrlC ||
+		    code == Ascii::Escape) {
 			decision = UserDecision::Cancel;
 			break;
 		} else if (code == ' ') {

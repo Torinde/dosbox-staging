@@ -1,12 +1,12 @@
-// SPDX-FileCopyrightText:  2021-2025 The DOSBox Staging Team
+// SPDX-FileCopyrightText:  2021-2026 The DOSBox Staging Team
 // SPDX-FileCopyrightText:  2002-2021 The DOSBox Team
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include "cpu/callback.h"
-#include "dos_inc.h"
+#include "cpu/registers.h"
+#include "dos.h"
 #include "dosbox.h"
 #include "hardware/memory.h"
-#include "cpu/registers.h"
 #include <cstring>
 
 bool DOS_IOCTL(void) {
@@ -60,7 +60,10 @@ bool DOS_IOCTL(void) {
 			if (Files[handle]->GetInformation() & 0x8000) {	//Check for device
 				const auto device_ptr = dynamic_cast<DOS_Device*>(
 				        Files[handle].get());
-				assert(device_ptr);
+				if (!device_ptr) {
+					DOS_SetError(DOSERR_FUNCTION_NUMBER_INVALID);
+					return false;
+				}
 				reg_al = device_ptr->GetStatus(true);
 			} else {
 				DOS_SetError(DOSERR_FUNCTION_NUMBER_INVALID);
@@ -75,8 +78,13 @@ bool DOS_IOCTL(void) {
 			uint16_t retcode=0;
 			const auto device_ptr = dynamic_cast<DOS_Device*>(
 			        Files[handle].get());
-			assert(device_ptr);
-			if (device_ptr->ReadFromControlChannel(bufptr, reg_cx, &retcode)) {
+			if (!device_ptr) {
+				DOS_SetError(DOSERR_FUNCTION_NUMBER_INVALID);
+				return false;
+			}
+			if (device_ptr->ReadFromControlChannel(bufptr,
+			                                       reg_cx,
+			                                       &retcode)) {
 				reg_ax = retcode;
 				return true;
 			}
@@ -90,8 +98,13 @@ bool DOS_IOCTL(void) {
 			uint16_t retcode=0;
 			const auto device_ptr = dynamic_cast<DOS_Device*>(
 			        Files[handle].get());
-			assert(device_ptr);
-			if (device_ptr->WriteToControlChannel(bufptr, reg_cx, &retcode)) {
+			if (!device_ptr) {
+				DOS_SetError(DOSERR_FUNCTION_NUMBER_INVALID);
+				return false;
+			}
+			if (device_ptr->WriteToControlChannel(bufptr,
+			                                      reg_cx,
+			                                      &retcode)) {
 				reg_ax = retcode;
 				return true;
 			}
@@ -119,7 +132,10 @@ bool DOS_IOCTL(void) {
 		if (Files[handle]->GetInformation() & EXT_DEVICE_BIT) {
 			const auto device_ptr = dynamic_cast<DOS_Device*>(
 			        Files[handle].get());
-			assert(device_ptr);
+			if (!device_ptr) {
+				DOS_SetError(DOSERR_FUNCTION_NUMBER_INVALID);
+				return false;
+			}
 			reg_al = device_ptr->GetStatus(false);
 			return true;
 		}
@@ -182,7 +198,7 @@ bool DOS_IOCTL(void) {
 
 					char const* find_ext=strchr(bufin,'.');
 					if (find_ext) {
-						Bitu size=(Bitu)(find_ext-bufin);
+						auto size=(Bitu)(find_ext-bufin);
 						if (size>8) size=8;
 						memcpy(buffer,bufin,size);
 						find_ext++;

@@ -1,8 +1,10 @@
-// SPDX-FileCopyrightText:  2021-2025 The DOSBox Staging Team
+// SPDX-FileCopyrightText:  2021-2026 The DOSBox Staging Team
 // SPDX-FileCopyrightText:  2002-2021 The DOSBox Team
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include "private/innovation.h"
+
+#include <memory>
 
 #include "audio/channel_names.h"
 #include "config/config.h"
@@ -10,57 +12,44 @@
 #include "misc/notifications.h"
 #include "misc/support.h"
 #include "utils/checks.h"
+#include "utils/string_utils.h"
 
 CHECK_NARROWING();
 
-void Innovation::Open(const std::string_view model_choice,
-                      const std::string_view clock_choice,
-                      const int filter_strength_6581,
-                      const int filter_strength_8580, const int port_choice,
-                      const std::string& channel_filter_choice)
+// The Innovation SSI-2001 and Microprose's "The Entertainer" used a SID 6581
+// clocked at 14.318180 MHz from the ISA bus. This clock signal is
+// divided by the counter and flip flops on the board by 16 to produce a base
+// frequency of .89488625 MHz. The cards default to listening on ports
+// 0x280-0x29D. The Entertainer also used I/O address 0x200 for identification,
+// which always return the magic value 0xA5.
+// https://forum.vcfed.org/index.php?threads/the-entertainer-sound-card-exposed.41255/
+// https://nerdlypleasures.blogspot.com/2014/01/sid-and-dos-unlikely-but-true-bedfellows.html
+
+constexpr auto BasePort = io_port_t{0x280};
+
+constexpr auto ChipModel   = reSIDfp::MOS6581;
+constexpr auto ChipClockHz = 14318180.0 / 16;
+
+constexpr auto EntertainerIdPort  = io_port_t{0x200};
+constexpr auto EntertainerIdValue = uint8_t{0xA5};
+
+Innovation::Innovation(const int sid_filter_strength,
+                       const std::string& channel_filter_choice)
+        : ms_per_clock{MillisInSecond / ChipClockHz}
 {
 	using namespace std::placeholders;
 
-	Close();
+	assert(ms_per_clock > 0);
 
-	// Sentinel
-	const auto model_choice_has_bool = parse_bool_setting(model_choice);
-	if (model_choice_has_bool && *model_choice_has_bool == false) {
-		return;
-	}
-
-	int filter_strength = 0;
-	auto sid_service    = std::make_unique<reSIDfp::SID>();
+	auto sid_service = std::make_unique<reSIDfp::SID>();
 
 	// Setup the model and filter
-	if (model_choice == "8580") {
-		sid_service->setChipModel(reSIDfp::MOS8580);
-		filter_strength = filter_strength_8580;
-		if (filter_strength > 0) {
-			sid_service->enableFilter(true);
-			sid_service->setFilter8580Curve(filter_strength / 100.0);
-		}
-	} else {
-		sid_service->setChipModel(reSIDfp::MOS6581);
-		filter_strength = filter_strength_6581;
-		if (filter_strength > 0) {
-			sid_service->enableFilter(true);
-			sid_service->setFilter6581Curve(filter_strength / 100.0);
-		}
+	sid_service->setChipModel(ChipModel);
+
+	if (sid_filter_strength > 0) {
+		sid_service->enableFilter(true);
+		sid_service->setFilter6581Curve(sid_filter_strength / 100.0);
 	}
-
-	// Determine chip clock frequency
-	if (clock_choice == "default")
-		chip_clock = 894886.25;
-	else if (clock_choice == "c64ntsc")
-		chip_clock = 1022727.14;
-	else if (clock_choice == "c64pal")
-		chip_clock = 985250.0;
-	else if (clock_choice == "hardsid")
-		chip_clock = 1000000.0;
-	assert(chip_clock);
-
-	ms_per_clock = MillisInSecond / chip_clock;
 
 	MIXER_LockMixerThread();
 
@@ -100,7 +89,7 @@ void Innovation::Open(const std::string_view model_choice,
 	const double passband = 0.9 * sample_rate_hz / 2;
 
 	// Assign the sampling parameters
-	sid_service->setSamplingParameters(chip_clock,
+	sid_service->setSamplingParameters(ChipClockHz,
 	                                   reSIDfp::RESAMPLE,
 	                                   sample_rate_hz,
 	                                   passband);
@@ -108,9 +97,16 @@ void Innovation::Open(const std::string_view model_choice,
 	// Setup and assign the port address
 	const auto read_from = std::bind(&Innovation::ReadFromPort, this, _1, _2);
 	const auto write_to = std::bind(&Innovation::WriteToPort, this, _1, _2, _3);
-	base_port           = check_cast<io_port_t>(port_choice);
-	read_handler.Install(base_port, read_from, io_width_t::byte, 0x20);
-	write_handler.Install(base_port, write_to, io_width_t::byte, 0x20);
+
+	read_handler.Install(BasePort, read_from, io_width_t::byte, 0x20);
+
+	read_entertainer_id_handler.Install(
+	        EntertainerIdPort,
+	        [](io_port_t, io_width_t) { return EntertainerIdValue; },
+	        io_width_t::byte,
+	        1);
+
+	write_handler.Install(BasePort, write_to, io_width_t::byte, 0x20);
 
 	// Move the locals into members
 	service = std::move(sid_service);
@@ -119,41 +115,27 @@ void Innovation::Open(const std::string_view model_choice,
 	// Ready state-values for rendering
 	last_rendered_ms = 0.0;
 
-	// Variable model_name is only used for logging, so use a const char* here
-	const char* model_name = model_choice == "8580" ? "8580" : "6581";
-	constexpr auto us_per_s = 1'000'000.0;
-	if (filter_strength == 0)
-		LOG_MSG("INNOVATION: Running on port %xh with a SID %s at %0.3f MHz",
-		        base_port,
-		        model_name,
-		        chip_clock / us_per_s);
-	else
-		LOG_MSG("INNOVATION: Running on port %xh with a SID %s at %0.3f MHz filtering at %d%%",
-		        base_port,
-		        model_name,
-		        chip_clock / us_per_s,
-		        filter_strength);
-
-	is_open = true;
+	LOG_MSG("INNOVATION: Running on port %xh with filtering at %d%%",
+	        BasePort,
+	        sid_filter_strength);
 
 	MIXER_UnlockMixerThread();
 }
 
-void Innovation::Close()
+Innovation::~Innovation()
 {
-	if (!is_open)
-		return;
-
 	LOG_MSG("INNOVATION: Shutting down");
 
 	MIXER_LockMixerThread();
 
 	// Stop playback
-	if (channel)
+	if (channel) {
 		channel->Enable(false);
+	}
 
 	// Remove the IO handlers before removing the SID device
 	read_handler.Uninstall();
+	read_entertainer_id_handler.Uninstall();
 	write_handler.Uninstall();
 
 	// Deregister the mixer channel and remove it
@@ -164,7 +146,6 @@ void Innovation::Close()
 	// Reset the members
 	channel.reset();
 	service.reset();
-	is_open = false;
 
 	MIXER_UnlockMixerThread();
 }
@@ -172,7 +153,7 @@ void Innovation::Close()
 uint8_t Innovation::ReadFromPort(io_port_t port, io_width_t)
 {
 	std::lock_guard lock(mutex);
-	const auto sid_port = static_cast<io_port_t>(port - base_port);
+	const auto sid_port = static_cast<io_port_t>(port - BasePort);
 	return service->read(sid_port);
 }
 
@@ -182,8 +163,8 @@ void Innovation::WriteToPort(io_port_t port, io_val_t value, io_width_t)
 
 	RenderUpToNow();
 
-	const auto data = check_cast<uint8_t>(value);
-	const auto sid_port = static_cast<io_port_t>(port - base_port);
+	const auto data     = check_cast<uint8_t>(value);
+	const auto sid_port = static_cast<io_port_t>(port - BasePort);
 	service->write(sid_port, data);
 }
 
@@ -200,12 +181,13 @@ void Innovation::RenderUpToNow()
 	// Keep rendering until we're current
 	while (last_rendered_ms < now) {
 		last_rendered_ms += ms_per_clock;
-		if (float frame = 0.0f; MaybeRenderFrame(frame))
+		if (float frame = 0.0f; MaybeRenderFrame(frame)) {
 			fifo.emplace(frame);
+		}
 	}
 }
 
-bool Innovation::MaybeRenderFrame(float &frame)
+bool Innovation::MaybeRenderFrame(float& frame)
 {
 	assert(service);
 
@@ -214,8 +196,9 @@ bool Innovation::MaybeRenderFrame(float &frame)
 	const auto frame_is_ready = service->clock(1, &sample);
 
 	// Get the frame
-	if (frame_is_ready)
+	if (frame_is_ready) {
 		frame = static_cast<float>(sample * 2);
+	}
 
 	return frame_is_ready;
 }
@@ -226,105 +209,80 @@ void Innovation::AudioCallback(const int requested_frames)
 
 	std::lock_guard lock(mutex);
 
-	//if (fifo.size())
-	//	LOG_MSG("INNOVATION: Queued %2lu cycle-accurate frames", fifo.size());
+	render_buf.clear();
 
 	auto frames_remaining = requested_frames;
 
-	// First, send any frames we've queued since the last callback
+	// Drain any cycle-accurate frames queued by RenderUpToNow
 	while (frames_remaining && fifo.size()) {
-		channel->AddSamples_mfloat(1, &fifo.front());
+		render_buf.push_back(fifo.front());
 		fifo.pop();
 		--frames_remaining;
 	}
-	// If the queue's run dry, render the remainder and sync-up our time datum
+	// Render the remainder
 	while (frames_remaining) {
 		if (float frame = 0.0f; MaybeRenderFrame(frame)) {
-			channel->AddSamples_mfloat(1, &frame);
+			render_buf.push_back(frame);
 		}
 		--frames_remaining;
 	}
+
+	channel->AddSamples_mfloat(static_cast<int>(render_buf.size()),
+	                           render_buf.data());
 	last_rendered_ms = PIC_AtomicIndex();
 }
 
-Innovation innovation;
-static void innovation_destroy([[maybe_unused]] Section *sec)
+static std::unique_ptr<Innovation> innovation = {};
+
+void INNOVATION_Init()
 {
-	innovation.Close();
+	const auto section = get_section("innovation");
+
+	if (section->GetBool("innovation")) {
+		innovation = std::make_unique<Innovation>(
+		        section->GetInt("innovation_sid_filter"),
+		        section->GetString("innovation_filter"));
+	}
 }
 
-static void innovation_init(Section *sec)
+void INNOVATION_Destroy()
 {
-	assert(sec);
-	SectionProp *conf = static_cast<SectionProp *>(sec);
-
-	const auto model_choice          = conf->GetString("sidmodel");
-	const auto clock_choice          = conf->GetString("sidclock");
-	const auto port_choice           = conf->GetHex("sidport");
-	const auto filter_strength_6581  = conf->GetInt("6581filter");
-	const auto filter_strength_8580  = conf->GetInt("8580filter");
-	const auto channel_filter_choice = conf->GetString("innovation_filter");
-
-	innovation.Open(model_choice,
-	                clock_choice,
-	                filter_strength_6581,
-	                filter_strength_8580,
-	                port_choice,
-	                channel_filter_choice);
-
-	constexpr auto changeable_at_runtime = true;
-	sec->AddDestroyFunction(&innovation_destroy, changeable_at_runtime);
+	innovation = {};
 }
 
-static void init_innovation_dosbox_settings(SectionProp& sec_prop)
+static void notify_innovation_setting_updated([[maybe_unused]] SectionProp& section,
+                                              [[maybe_unused]] const std::string& prop_name)
+{
+	INNOVATION_Destroy();
+	INNOVATION_Init();
+}
+
+static void init_innovation_config_settings(SectionProp& sec_prop)
 {
 	constexpr auto when_idle = Property::Changeable::WhenIdle;
 
-	// Chip type
-	auto* str_prop = sec_prop.AddString("sidmodel", when_idle, "none");
-	str_prop->SetValues({"auto", "6581", "8580", "none"});
-	str_prop->SetHelp(
-	        "Model of chip to emulate in the Innovation SSI-2001 card:\n"
-	        "  auto:  Use the 6581 chip.\n"
-	        "  6581:  The original chip, known for its bassy and rich character.\n"
-	        "  8580:  A later revision that more closely matched the SID specification.\n"
-	        "         It fixed the 6581's DC bias and is less prone to distortion.\n"
-	        "         The 8580 is an option on reproduction cards, like the DuoSID.\n"
-	        "  none:  Disable the card (default).");
-
-	// Chip clock frequency
-	str_prop = sec_prop.AddString("sidclock", when_idle, "default");
-	str_prop->SetValues({"default", "c64ntsc", "c64pal", "hardsid"});
-	str_prop->SetHelp(
-	        "The SID chip's clock frequency, which is jumperable on reproduction cards:\n"
-	        "  default:  0.895 MHz, per the original SSI-2001 card (default).\n"
-	        "  c64ntsc:  1.023 MHz, per NTSC Commodore PCs and the DuoSID.\n"
-	        "  c64pal:   0.985 MHz, per PAL Commodore PCs and the DuoSID.\n"
-	        "  hardsid:  1.000 MHz, available on the DuoSID.");
-
-	// IO Address
-	auto* hex_prop          = sec_prop.AddHex("sidport", when_idle, 0x280);
-	hex_prop->SetValues({"240", "260", "280", "2a0", "2c0"});
-	hex_prop->SetHelp(
-	        "The IO port address of the Innovation SSI-2001 (280 by default).");
+	// Card state
+	auto* bool_prop = sec_prop.AddBool("innovation", when_idle, false);
+	assert(bool_prop);
+	bool_prop->SetHelp(
+	        "Enable emulation of the Innovation SSI-2001 and Microprose's \"The Entertainer\"\n"
+	        "sound cards on base port of 280. These use the iconic MOS 6581 SID chip of the\n"
+	        "Commodore 64 personal computer from the 1980s. Only 15 games are known to\n"
+	        "support these cards.");
 
 	// Filter strengths
-	auto* int_prop = sec_prop.AddInt("6581filter", when_idle, 50);
+	auto* int_prop = sec_prop.AddInt("innovation_sid_filter", when_idle, 50);
+	assert(int_prop);
 	int_prop->SetMinMax(0, 100);
 	int_prop->SetHelp(
-	        "Adjusts the 6581's filtering strength as a percentage from 0 to 100\n"
-	        "(50 by default). The SID's analog filtering meant that each chip was\n"
-	        "physically unique.");
+	        "Adjusts the 6581's filtering strength as a percentage from 0 to 100 (50 by\n"
+	        "default). The SID's analog filtering meant that each chip was physically unique.");
 
-	int_prop = sec_prop.AddInt("8580filter", when_idle, 50);
-	int_prop->SetMinMax(0, 100);
-	int_prop->SetHelp("Adjusts the 8580's filtering strength as a percentage from 0 to 100\n"
-	                   "(50 by default).");
-
-	str_prop = sec_prop.AddString("innovation_filter", when_idle, "off");
+	auto* str_prop = sec_prop.AddString("innovation_filter", when_idle, "off");
 	assert(str_prop);
 	str_prop->SetHelp(
-	        "Filter for the Innovation audio output:\n"
+	        "Filter for the Innovation audio output ('off' by default). Possible values:\n"
+	        "\n"
 	        "  off:       Don't filter the output (default).\n"
 	        "  <custom>:  Custom filter definition; see 'sb_filter' for details.");
 }
@@ -333,10 +291,8 @@ void INNOVATION_AddConfigSection(const ConfigPtr& conf)
 {
 	assert(conf);
 
-	constexpr auto changeable_at_runtime = true;
-	SectionProp* sec = conf->AddSectionProp("innovation",
-	                                          &innovation_init,
-	                                          changeable_at_runtime);
-	assert(sec);
-	init_innovation_dosbox_settings(*sec);
+	auto section = conf->AddSection("innovation");
+	section->AddUpdateHandler(notify_innovation_setting_updated);
+
+	init_innovation_config_settings(*section);
 }

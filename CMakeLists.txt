@@ -1,5 +1,20 @@
 cmake_minimum_required(VERSION 3.25)
 
+# The project only tests preset build configurations, so we use
+# the IS_PRESET_USED variable to check and recommend using a preset.
+
+if (NOT IS_PRESET_USED)
+  message(WARNING
+    "\nPer docs/build-*.md, we recommend using a platform-specific preset.
+     cmake --preset <name>"
+  )
+  execute_process(
+    COMMAND ${CMAKE_COMMAND} --list-presets
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+  )
+  message("")
+endif()
+
 set(VCPKG_USE_HOST_TOOLS ON)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON CACHE BOOL
@@ -7,48 +22,155 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON CACHE BOOL
 
 project(dosbox-staging
   LANGUAGES C CXX
-  VERSION 0.83.0
+  VERSION 0.84.0
 )
 
 set(DOSBOX_VERSION ${PROJECT_VERSION}-alpha)
 
-set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-# TODO Enable certain warnings-as-errors for at least MSVC, Clang & GCC
+# ccache support
+find_program(CCACHE_PROGRAM ccache)
+if (CCACHE_PROGRAM)
+  set(CMAKE_C_COMPILER_LAUNCHER   "${CCACHE_PROGRAM}")
+  set(CMAKE_CXX_COMPILER_LAUNCHER "${CCACHE_PROGRAM}")
+  # Direct mode is 10-fold quicker than non-direct mode
+  set(ENV{CCACHE_DIRECT} "true")
+  message(STATUS "Found and using ccache")
+endif()
 
 # Disable the noisy narrowing and conversion warnings by default. Use the
 # CHECK_NARROWING() macro to opt-in these checks on a per-file basis. See
 # `src/util/checks.h` for details.
-if(MSVC)
-  add_compile_options("/wd4244" "/MP")
+#
+# Warning flags are set globally via add_compile_options() rather than
+# per-target because the project wants consistent diagnostics across all
+# compiled code. Vendored third-party libraries under src/libs/ opt out
+# via disable_warnings() which applies -w to suppress all warnings.
+if (MSVC)
+  # /W4 displays level 1, level 2, and level 3 warnings, and all level 4
+  # (informational) warnings that aren't off by default.
+  add_compile_options("/wd4244" "/MP" "/W4")
 
   # Disable cl/clangcl warnings about insecure C functions
   add_compile_definitions(_CRT_SECURE_NO_WARNINGS)
+
 else()
-  add_compile_options("-Wno-conversion" "-Wno-narrowing")
+
+  # Warning flags common to C and C++ code
+  set(WARNING_FLAGS_COMMON
+      "-Wall" "-Wextra" "-Wdeprecated"
+      "-Wno-unknown-warning-option" "-Wno-unknown-pragmas"
+      "-Wno-conversion" "-Wno-narrowing"
+      "-Wdisabled-optimization" "-Wduplicated-branches" "-Wtrampolines" "-Wvla"
+      "-Wlogical-op" "-Wduplicated-cond" "-Wpointer-arith"
+      "-Wredundant-decls" "-Wfloat-conversion"
+  )
+
+  # Warning flags only valid for the C code
+  set(WARNING_FLAGS_C
+      ${WARNING_FLAGS_COMMON}
+      "-Wjump-misses-init"
+      "-Wnested-externs"
+      "-Wold-style-definition"
+      "-Wstrict-prototypes"
+      "-Wvariadic-macros"
+  )
+
+  # Warning flags only valid for the C++ code
+  set(WARNING_FLAGS_CXX
+      ${WARNING_FLAGS_COMMON}
+      "-Weffc++"
+      "-Wextra-semi"
+      "-Wimplicit-fallthrough"
+  )
+
+  # GCC 12 (still used in our CI workflow) complains about unrecognized
+  # command line options, so we'll enable these conditionally for the GCC 13+
+  # and Clang builds only for now.
+  #
+  if ((CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND
+       CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL 13)
+       OR
+       (CMAKE_CXX_COMPILER_ID STREQUAL "Clang"))
+
+    set(WARNING_FLAGS_C
+        ${WARNING_FLAGS_C}
+        "-Winvalid-utf8"
+        "-Wtrivial-auto-var-init"
+    )
+    set(WARNING_FLAGS_CXX
+        ${WARNING_FLAGS_CXX}
+        "-Winvalid-utf8"
+        "-Wtrivial-auto-var-init"
+    )
+  endif()
+
+  if ((CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND
+       CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL 15)
+       OR
+       (CMAKE_CXX_COMPILER_ID STREQUAL "Clang"))
+
+    set(WARNING_FLAGS_C
+            ${WARNING_FLAGS_C}
+            "-Wdeprecated-non-prototype"
+            "-Wflex-array-member-not-at-end"
+            "-Wfree-labels"
+    )
+  endif()
+
+  add_compile_options(
+    "$<$<COMPILE_LANGUAGE:C>:${WARNING_FLAGS_C}>"
+    "$<$<COMPILE_LANGUAGE:CXX>:${WARNING_FLAGS_CXX}>"
+  )
+
+endif()
+
+# GCC needs more memory reserved to fully optimize the CPU emulation code
+if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+  add_compile_options("--param" "max-gcse-memory=300000")
+endif()
+
+if (APPLE)
+  # TODO: These are sprintf deprecated warnings. We probably do want to remove
+  # sprintf usage at some point.
+  add_compile_options("-Wno-deprecated-declarations")
+
+  # This adds more metadata to the executable (about ~500KB) which is handy
+  # for profiling. It also results in better crash dumps. This does not affect
+  # performance at all.
+  add_compile_options("-g")
+
+  if (CMAKE_OSX_ARCHITECTURES STREQUAL "arm64")
+    # This has virtually zero performance impact on ARM and it gives us deep
+    # observability on release mode builds at full speed (e.g., when using a
+    # profiler).
+    add_compile_options("-fno-omit-frame-pointer")
+  endif()
 endif()
 
 option(OPT_DEBUGGER "Enable debugger" OFF)
 option(OPT_HEAVY_DEBUGGER "Enable heavy debugger" OFF)
-if(OPT_HEAVY_DEBUGGER)
+if (OPT_HEAVY_DEBUGGER)
   set(OPT_DEBUGGER ON CACHE INTERNAL "")
 endif()
 
 include(CheckIncludeFile)
 include(CheckIncludeFiles)
 include(CheckCXXSourceCompiles)
+include(CheckStructHasMember)
 include(CheckSymbolExists)
 include(GNUInstallDirs)
 
-if(WIN32)
+if (WIN32)
   set(DOSBOX_PLATFORM_WINDOWS ON)
 
-elseif(APPLE)
+elseif (APPLE)
   set(DOSBOX_PLATFORM_MACOS ON)
   set(MACOSX ON)
 
-elseif(LINUX)
+elseif (LINUX)
   set(DOSBOX_PLATFORM_LINUX ON)
 
 else()
@@ -59,30 +181,28 @@ endif()
 option(OPT_SANITIZER        "Enable general sanitizer checks")
 option(OPT_THREAD_SANITIZER "Enable thread sanitizer")
 
-if(OPT_SANITIZER AND OPT_THREAD_SANITIZER)
+if (OPT_SANITIZER AND OPT_THREAD_SANITIZER)
   message(FATAL_ERROR
           "-DOPT_SANITIZER and -DOPT_THREAD_SANITIZER are mutually exclusive")
 endif()
 
-if(OPT_SANITIZER)
-  if(DOSBOX_PLATFORM_MACOS)
+if (OPT_SANITIZER)
+  if (DOSBOX_PLATFORM_MACOS)
     set(SANITIZER_FLAGS "address,pointer-compare,pointer-subtract,undefined")
   else()
     set(SANITIZER_FLAGS "address,pointer-compare,pointer-subtract,leak,undefined")
   endif()
-elseif(OPT_THREAD_SANITIZER)
-  if(DOSBOX_PLATFORM_MACOS)
-    message(WARNING "Thread sanitizer does not work well on macOS")
-  endif()
+
+elseif (OPT_THREAD_SANITIZER)
   set(SANITIZER_FLAGS "thread")
 endif()
 
-if(OPT_SANITIZER OR OPT_THREAD_SANITIZER)
-  if(MSVC)
-    message(FATAL_ERROR "Sanitizers are only supported for CLANG and GCC compilers")
+if (OPT_SANITIZER OR OPT_THREAD_SANITIZER)
+  if (MSVC)
+    message(FATAL_ERROR "Sanitizers are only supported for Clang and GCC compilers")
   endif()
 
-  if(DOSBOX_PLATFORM_WINDOWS)
+  if (DOSBOX_PLATFORM_WINDOWS)
     message(WARNING "Sanitizers were not tested on Windows")
   endif()
 
@@ -101,7 +221,7 @@ endif()
 
 # Check host endianness
 if (CMAKE_CXX_BYTE_ORDER STREQUAL BIG_ENDIAN)
-  set(WORDS_BIGENDIAN ON)
+  message(FATAL_ERROR "Big-endian architectures are not supported")
 endif()
 
 # Enable color output for certain compilers
@@ -109,7 +229,7 @@ set(CMAKE_COLOR_DIAGNOSTICS ON)
 
 find_package(Git)
 
-if(Git_FOUND)
+if (Git_FOUND)
   execute_process(
     COMMAND ${GIT_EXECUTABLE} rev-parse --short=5 HEAD
     WORKING_DIRECTORY         ${CMAKE_CURRENT_LIST_DIR}
@@ -121,9 +241,9 @@ else()
 endif()
 
 check_include_file("unistd.h" HAS_UNISTD)
-if(NOT HAS_UNISTD)
+if (NOT HAS_UNISTD)
   configure_file(
-    src/platform/visualc/unistd.h
+    src/platform/windows/visualc/unistd.h
     ${CMAKE_CURRENT_BINARY_DIR}/include/unistd.h
   )
 endif()
@@ -131,7 +251,7 @@ endif()
 # File-descriptor manipulation routines, such as FD_ZERO, are used
 # by Enet, slirp, and ManyMouse's X11 interface. Unfortunately these
 # routines aren't universally available.
-if(DOSBOX_PLATFORM_WINDOWS)
+if (DOSBOX_PLATFORM_WINDOWS)
   check_symbol_exists(FD_ZERO "winsock2.h"   HAVE_FD_ZERO)
 else()
   check_symbol_exists(FD_ZERO "sys/select.h" HAVE_FD_ZERO)
@@ -160,21 +280,34 @@ int main() {
 check_cxx_source_compiles("${TEST_CODE_BUILTIN_CLEAR_CACHE}"
                           HAVE_BUILTIN_CLEAR_CACHE)
 
-if(CMAKE_SYSTEM_PROCESSOR  STREQUAL "AMD64"  OR
-   CMAKE_SYSTEM_PROCESSOR  STREQUAL "x86_64" OR
-   CMAKE_OSX_ARCHITECTURES STREQUAL "x86_64")
+set(C_TARGET_CPU_ARM    OFF)
+set(C_TARGET_CPU_X86    OFF)
 
-  set(C_TARGETCPU        "X86_64")
-  set(C_DYNAMIC_X86      ON)
-  set(C_DYNREC           OFF)
+option(OPT_FORCE_DYNREC "Force DYNREC dynamic recompiler (not x86-64 optimized)" OFF)
+
+if (CMAKE_SYSTEM_PROCESSOR  STREQUAL "AMD64"  OR
+    CMAKE_SYSTEM_PROCESSOR  STREQUAL "x86_64" OR
+    CMAKE_OSX_ARCHITECTURES STREQUAL "x86_64")
+
+  set(C_TARGET_CPU_X86    ON)
+
+  if (OPT_FORCE_DYNREC)
+      set(C_DYNAMIC_X86  OFF)
+      set(C_DYNREC       ON)
+  else()
+      set(C_DYNAMIC_X86  ON)
+      set(C_DYNREC       OFF)
+  endif()
+
   set(C_FPU_X86          ON)
   set(C_UNALIGNED_MEMORY ON)
 
-elseif(CMAKE_SYSTEM_PROCESSOR  STREQUAL "arm64"   OR
-       CMAKE_SYSTEM_PROCESSOR  STREQUAL "aarch64" OR
-       CMAKE_OSX_ARCHITECTURES STREQUAL "arm64")
+elseif (CMAKE_SYSTEM_PROCESSOR  STREQUAL "arm64"   OR
+        CMAKE_SYSTEM_PROCESSOR  STREQUAL "aarch64" OR
+        CMAKE_OSX_ARCHITECTURES STREQUAL "arm64")
 
-  set(C_TARGETCPU        "ARMV8LE")
+  set(C_TARGET_CPU_ARM    ON)
+
   set(C_DYNAMIC_X86      OFF)
   set(C_DYNREC           ON)
   set(C_FPU_X86          OFF)
@@ -186,7 +319,6 @@ endif()
 
 check_include_file("libgen.h"     HAVE_LIBGEN_H)
 check_include_file("netinet/in.h" HAVE_NETINET_IN_H)
-check_include_file("pwd.h"        HAVE_PWD_H)
 check_include_file("stdlib.h"     HAVE_STDLIB_H)
 check_include_file("strings.h"    HAVE_STRINGS_H)
 check_include_file("sys/types.h"  HAVE_SYS_TYPES_H)
@@ -194,54 +326,56 @@ check_include_file("sys/xattr.h"  HAVE_SYS_XATTR_H)
 
 check_symbol_exists(getpeername  sys/socket.h  HAVE_GETPEERNAME)
 check_symbol_exists(getsockname  sys/socket.h  HAVE_GETSOCKNAME)
-if(HAVE_GETPEERNAME AND HAVE_GETSOCKNAME)
+if (HAVE_GETPEERNAME AND HAVE_GETSOCKNAME)
   set(HAVE_SYS_SOCKET_H ON)
 endif()
 
 set(C_PER_PAGE_W_OR_X ON)
-set(C_FPU ON)
 
-# Networking (TODO: Option & dependent on SDL2_Net)
-set(C_MODEM ON)
-set(C_IPX ON)
+option(OPT_OPENGL "Enable OpenGL render backend" ON)
+if (OPT_OPENGL)
+  set(C_OPENGL ON)
+endif()
 
-set(C_OPENGL ON)
-set(C_MT32EMU ON)       # TODO: Option
+option(OPT_MT32EMU "Enable Roland MT-32 emulation support" ON)
+if (OPT_MT32EMU)
+  set(C_MT32EMU ON)
+  find_package(MT32Emu REQUIRED)
+endif()
 
-set(C_TRACY OFF)        # TODO: Option
-set(C_DIRECTSERIAL ON)
-
-if(OPT_DEBUGGER)
+if (OPT_DEBUGGER)
   set(C_DEBUGGER ON)
 
-  if(OPT_HEAVY_DEBUGGER)
+  if (OPT_HEAVY_DEBUGGER)
     set(C_HEAVY_DEBUGGER ON)
   endif()
 endif()
 
 # ManyMouse - optional XInput support
 option(OPT_MANYMOUSE
-       "Use ManyMouse library for single-computer multiplayer gaming in The Settlers I/II"
-       ON
+  "Use ManyMouse library for single-computer multiplayer gaming in The Settlers I/II"
+  ON
 )
 
 # ManyMouse - optional XInput support
 option(OPT_XINPUT
-       "Let ManyMouse use the X Input protocol"
-       OFF
+  "Let ManyMouse use the X Input protocol"
+  OFF
 )
 
 # ManyMouse
 if (OPT_MANYMOUSE)
   if (NOT HAVE_FD_ZERO)
     message(WARNING "ManyMouse requires FD_ZERO support")
-  elseif(DOSBOX_PLATFORM_MACOS)
-    include (${CMAKE_CURRENT_SOURCE_DIR}/src/libs/manymouse/cmake/FindIOKit.cmake)
-    if (NOT ${IOKit_FOUND})
+
+  elseif (DOSBOX_PLATFORM_MACOS)
+    find_library(IOKit_LIBRARY IOKit)
+    if (NOT IOKit_LIBRARY)
       message(WARNING "ManyMouse requires IOKit")
     else()
       set(C_MANYMOUSE ON)
     endif()
+
   else()
     set(C_MANYMOUSE ON)
   endif()
@@ -260,21 +394,18 @@ endif()
 # Tests
 option(OPT_TESTS "Enable tests" ON)
 
-if(OPT_TESTS)
+# Offline documentation
+option(OPT_DOCUMENTATION "Build offline documentation" OFF)
+
+if (OPT_TESTS)
   enable_testing()
 endif()
-
-# macOS
-set(C_COREAUDIO      "${DOSBOX_PLATFORM_MACOS}")
-set(C_COREMIDI       "${DOSBOX_PLATFORM_MACOS}")
-set(C_COREFOUNDATION "${DOSBOX_PLATFORM_MACOS}")
-set(C_CORESERVICES   "${DOSBOX_PLATFORM_MACOS}")
 
 # Linux
 set(C_ALSA "${DOSBOX_PLATFORM_LINUX}")
 
 # Windows
-if(DOSBOX_PLATFORM_WINDOWS)
+if (DOSBOX_PLATFORM_WINDOWS)
   # Prevent <windows.h> from clobbering std::min and std::max
   set(NOMINMAX ON)
   # Enable mathematical constants (such as M_PI) in Windows math.h header
@@ -298,106 +429,172 @@ check_symbol_exists(
   sys_icache_invalidate "libkern/OSCacheControl.h" HAVE_SYS_ICACHE_INVALIDATE
 )
 
+check_struct_has_member(
+  "struct dirent"
+  d_type
+  dirent.h
+  HAVE_STRUCT_DIRENT_D_TYPE
+)
+
 set(CUSTOM_DATADIR "${CMAKE_INSTALL_FULL_DATADIR}")
 
 set(project_name "${PROJECT_NAME}")
 set(version      "${PROJECT_VERSION}")
+
+# PkgConfig is needed for speexdsp (no cmake config in vcpkg) and
+# for zlib-ng detection on system-libs builds.
+find_package(PkgConfig REQUIRED)
+
+# Detect zlib-ng (preferred) or plain zlib for the ZMBV video codec.
+#
+# On vcpkg builds, zlib-ng is always available (listed in vcpkg.json).
+# On system-libs builds (Linux), try zlib-ng first, fall back to plain zlib.
+# C_ZLIB_NG controls whether the native zlib-ng API (zlib-ng.h, zng_*)
+# or the standard zlib API (zlib.h) is used in the ZMBV codec.
+if (USE_SYSTEM_LIBS)
+  pkg_check_modules(ZLIB_NG IMPORTED_TARGET zlib-ng)
+
+  if (ZLIB_NG_FOUND)
+    set(C_ZLIB_NG ON)
+    set(ZMBV_ZLIB_TARGET PkgConfig::ZLIB_NG)
+  else()
+    find_package(ZLIB REQUIRED)
+    set(ZMBV_ZLIB_TARGET ZLIB::ZLIB)
+  endif()
+
+else() # vcpkg path
+  find_package(zlib-ng CONFIG REQUIRED)
+  set(C_ZLIB_NG ON)
+  set(ZMBV_ZLIB_TARGET zlib-ng::zlib)
+endif()
 
 configure_file(
   src/dosbox_config.h.in.cmake
   ${CMAKE_CURRENT_BINARY_DIR}/include/dosbox_config.h
 )
 
-# Allow dynamically loading externalised vcpkg dependencies at runtime
-# from the $EXE_DIR/lib directory (must be set before 'add_executable')
+# Set RPATH so runtime-loaded shared libraries (e.g., slirp) can be
+# found in a lib/ directory next to the executable. Windows uses its
+# own DLL search path (exe directory), so RPATH is not needed there.
 if (APPLE)
   set(CMAKE_INSTALL_RPATH "@executable_path/lib")
-else()
+elseif (DOSBOX_PLATFORM_LINUX)
   set(CMAKE_INSTALL_RPATH "$ORIGIN/lib")
 endif()
 set(CMAKE_BUILD_WITH_INSTALL_RPATH ON)
 
 # Find common external dependencies
-find_package(PkgConfig REQUIRED)
-find_package(SDL2 CONFIG REQUIRED)
-find_package(SDL2_net REQUIRED)
+find_package(SDL3 REQUIRED CONFIG REQUIRED COMPONENTS SDL3)
+find_package(SDL3_image CONFIG REQUIRED)
 find_package(iir REQUIRED)
 find_package(PNG REQUIRED)
 find_package(OpenGL REQUIRED)
-find_package(MT32Emu REQUIRED)
+find_package(FluidSynth REQUIRED CONFIG)
 if (C_ALSA)
   find_package(ALSA REQUIRED)
 endif()
+
+# SpeexDSP: vcpkg has no cmake config, only a .pc file
 pkg_check_modules(SPEEXDSP REQUIRED IMPORTED_TARGET speexdsp)
 
 add_executable(dosbox src/main.cpp src/dosbox.cpp)
-target_include_directories(
-  dosbox PUBLIC include ${CMAKE_CURRENT_BINARY_DIR}/include
-)
+if (OPT_DEBUGGER)
+  set_target_properties(dosbox PROPERTIES OUTPUT_NAME dosbox_with_debugger)
+endif()
 
 # Bundle licenses, but skip the ones that are not relevant for
 # binary distribution or allow us to not distribute the license text.
 set(LICENSE_FILES
-    licenses/BSD-2-Clause.txt
-    licenses/BSD-3-Clause.txt
-    licenses/DEBUG.COM.txt
-    licenses/GPL-2.0.txt
-    licenses/LGPL-2.1.txt
-    licenses/MIT.txt
-    licenses/UNICODE.txt
-    licenses/Zlib.txt)
+  licenses/BSD-2-Clause.txt
+  licenses/BSD-3-Clause.txt
+  licenses/DEBUG.COM.txt
+  licenses/GPL-2.0.txt
+  licenses/LGPL-2.1.txt
+  licenses/MIT.txt
+  licenses/UNICODE.txt
+  licenses/Zlib.txt
+)
 
-# Set the directory with resources to bundle
+# The source of the resources, relative to the source root
 set(RESOURCES_PATH "resources")
+
+# The copy target of the resources, relative to the compiled binary
+if (APPLE OR WIN32)
+  set(RESOURCE_COPY_PATH "Resources" CACHE STRING "Resources copy target relative to binary")
+else()
+  set(RESOURCE_COPY_PATH "resources" CACHE STRING "Resources copy target relative to binary")
+endif()
 
 # Generate asset copy commands and add them as a dependency
 include(cmake/add_copy_assets.cmake)
 add_copy_assets()
 
-#find_package(Tracy CONFIG REQUIRED)
-#target_link_libraries(dosbox PRIVATE Tracy::TracyClient)
+# Build offline documentation (must come after add_copy_assets because
+# it adds a dependency on the copy_assets target)
+if (OPT_DOCUMENTATION)
+  include(cmake/add_build_documentation.cmake)
+  add_build_documentation()
+endif()
 
-include_directories(
+# Project-wide include paths used by the main library and standalone
+# libraries that reference project headers (dosbox_config.h, etc.).
+# Using an INTERFACE library makes these paths explicit per-target
+# instead of polluting every target via global include_directories().
+add_library(project_headers INTERFACE)
+target_include_directories(project_headers INTERFACE
   src
-  src/libs
   ${CMAKE_CURRENT_BINARY_DIR}/include
 )
 
-add_library(libdosboxcommon STATIC)
+add_library(dosboxcommon STATIC)
+target_link_libraries(dosboxcommon PUBLIC project_headers)
 
 
 # Add tests before src so that the dosbox_tests target is
 # available for target_sources()
-if(OPT_TESTS)
+if (OPT_TESTS)
   add_subdirectory(tests)
 endif()
 
 add_subdirectory(src)
 
-if(WIN32)
-  target_sources(dosbox PRIVATE src/winres.rc)
-endif()
-
 # libatomic is part of the GCC runtime library.
 # This is used by GCC and Clang by default on Linux.
 # Mac and Windows don't need this except for maybe MSYS2.
 # This is required for Linux to use all features of std::atomic.
-find_library(LIBATOMIC libatomic.so.1)
+#
+# The versioned libatomic.so.1 fallback is needed because some Linux
+# environments only ship the runtime library without the unversioned
+# libatomic.so dev symlink that find_library(NAMES atomic) expects.
+find_library(LIBATOMIC NAMES atomic libatomic.so.1)
 
-if(LIBATOMIC)
-  target_link_libraries(libdosboxcommon PRIVATE ${LIBATOMIC})
+if (LIBATOMIC)
+  target_link_libraries(dosboxcommon PRIVATE ${LIBATOMIC})
 endif()
 
-target_link_libraries(libdosboxcommon PRIVATE
+target_link_libraries(dosboxcommon PUBLIC loguru)
+target_link_libraries(dosboxcommon PRIVATE
   $<IF:$<TARGET_EXISTS:iir::iir>,iir::iir,iir::iir_static>
-  loguru
-  libdecoders
+  decoders
 )
 
 target_link_libraries(dosbox PRIVATE
-  libdosboxcommon
-  $<TARGET_NAME_IF_EXISTS:SDL2::SDL2main>
-  $<IF:$<TARGET_EXISTS:SDL2::SDL2>,SDL2::SDL2,SDL2::SDL2-static>
+  dosboxcommon
+  SDL3::Headers
+)
+
+# Export dynamic symbols so loguru's stack traces can resolve names
+if (HAS_STACK_INCLUDES)
+  target_link_options(dosbox PRIVATE "-rdynamic")
+endif()
+
+# Remove MkDocs source-tree caches (website/.cache, __pycache__, site)
+add_custom_target(clean-manual
+  COMMAND "${CMAKE_COMMAND}" -E rm -rf "${CMAKE_SOURCE_DIR}/website/.cache"
+  COMMAND "${CMAKE_COMMAND}" -E rm -rf "${CMAKE_SOURCE_DIR}/website/__pycache__"
+  COMMAND "${CMAKE_COMMAND}" -E rm -rf "${CMAKE_SOURCE_DIR}/website/site"
+  COMMENT "Removing MkDocs caches"
+  VERBATIM
 )
 
 # Add installation rules

@@ -1,10 +1,11 @@
-// SPDX-FileCopyrightText:  2023-2025 The DOSBox Staging Team
+// SPDX-FileCopyrightText:  2023-2026 The DOSBox Staging Team
 // SPDX-FileCopyrightText:  2002-2021 The DOSBox Team
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include "memory.h"
 
 #include <cstring>
+#include <memory>
 
 #include "config/setup.h"
 #include "cpu/paging.h"
@@ -196,7 +197,7 @@ void mem_memcpy(PhysPt dest,PhysPt src,Bitu size) {
 }
 
 void MEM_BlockRead(PhysPt pt,void * data,Bitu size) {
-	uint8_t * write=reinterpret_cast<uint8_t *>(data);
+	auto write = reinterpret_cast<uint8_t *>(data);
 	while (size--) {
 		*write++=mem_readb_inline(pt++);
 	}
@@ -204,7 +205,7 @@ void MEM_BlockRead(PhysPt pt,void * data,Bitu size) {
 
 void MEM_BlockWrite(PhysPt pt, const void *data, size_t size)
 {
-	const uint8_t *read = static_cast<const uint8_t *>(data);
+	auto read = static_cast<const uint8_t *>(data);
 	while (size--) {
 		mem_writeb_inline(pt++,*read++);
 	}
@@ -703,16 +704,16 @@ HostPt GetMemBase(void)
 	return MemBase;
 }
 
-class MEMORY final : public ModuleBase {
+class MEMORY {
 private:
 	IO_ReadHandleObject ReadHandler   = {};
 	IO_WriteHandleObject WriteHandler = {};
 
 public:
-	MEMORY(Section *configuration) : ModuleBase(configuration)
+	MEMORY(Section* sec)
 	{
 		// Get the users memory size preference
-		const auto section = static_cast<SectionProp*>(configuration);
+		const auto section       = static_cast<SectionProp*>(sec);
 		const auto num_megabytes = section->GetInt("memsize");
 		check_num_megabytes(num_megabytes);
 
@@ -766,18 +767,15 @@ public:
 	}
 };
 
-static MEMORY* test;
+static std::unique_ptr<MEMORY> memory_module = {};
 
-static void MEM_ShutDown([[maybe_unused]] Section *sec)
+void MEM_Init(Section* section)
 {
-	delete test;
+	assert(section);
+	memory_module = std::make_unique<MEMORY>(section);
 }
 
-void MEM_Init(Section* sec)
+void MEM_Destroy()
 {
-	assert(sec);
-
-	/* shutdown function */
-	test = new MEMORY(sec);
-	sec->AddDestroyFunction(&MEM_ShutDown);
+	memory_module = {};
 }

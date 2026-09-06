@@ -1,13 +1,14 @@
-// SPDX-FileCopyrightText:  2002-2021 The DOSBox Team
+// SPDX-FileCopyrightText:  2002-2025 The DOSBox Team
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #ifndef DOSBOX_PAGING_H
 #define DOSBOX_PAGING_H
 
 #include "dosbox.h"
-#include "debugger/debugger.h"
+
 #include <vector>
 
+#include "debugger/debugger.h"
 #include "hardware/memory.h"
 
 // disable this to reduce the size of the TLB
@@ -68,7 +69,9 @@ public:
 	uint_fast8_t flags = 0x0;
 };
 
-/* Some other functions */
+void PAGING_Init();
+
+// Some other functions
 void PAGING_Enable(bool enabled);
 bool PAGING_Enabled();
 
@@ -90,19 +93,6 @@ void MEM_SetPageHandler(Bitu phys_page, Bitu pages, PageHandler * handler);
 void MEM_ResetPageHandler(Bitu phys_page, Bitu pages);
 
 struct X86PageEntry {
-#ifdef WORDS_BIGENDIAN
-	uint32_t base : 20;
-	uint32_t avl : 3;
-	uint32_t g : 1;
-	uint32_t pat : 1;
-	uint32_t d : 1;
-	uint32_t a : 1;
-	uint32_t pcd : 1;
-	uint32_t pwt : 1;
-	uint32_t us : 1;
-	uint32_t wr : 1;
-	uint32_t p : 1;
-#else
 	uint32_t p : 1;
 	uint32_t wr : 1;
 	uint32_t us : 1;
@@ -114,23 +104,9 @@ struct X86PageEntry {
 	uint32_t g : 1;
 	uint32_t avl : 3;
 	uint32_t base : 20;
-#endif
 
 	constexpr void set(const uint32_t value)
 	{
-#ifdef WORDS_BIGENDIAN
-		base = (value >> 12) & 0xFFFFF;
-		avl  = (value >> 9) & 0x7;
-		g    = (value >> 8) & 0x1;
-		pat  = (value >> 7) & 0x1;
-		d    = (value >> 6) & 0x1;
-		a    = (value >> 5) & 0x1;
-		pcd  = (value >> 4) & 0x1;
-		pwt  = (value >> 3) & 0x1;
-		us   = (value >> 2) & 0x1;
-		wr   = (value >> 1) & 0x1;
-		p    = value & 0x1;
-#else
 		p    = value & 0x1;
 		wr   = (value >> 1) & 0x1;
 		us   = (value >> 2) & 0x1;
@@ -142,25 +118,11 @@ struct X86PageEntry {
 		g    = (value >> 8) & 0x1;
 		avl  = (value >> 9) & 0x7;
 		base = (value >> 12) & 0xFFFFF;
-#endif
 	}
 
 	constexpr uint32_t get() const
 	{
 		uint32_t value = 0;
-#ifdef WORDS_BIGENDIAN
-		value |= (base << 12);
-		value |= (avl << 9);
-		value |= (g << 8);
-		value |= (pat << 7);
-		value |= (d << 6);
-		value |= (a << 5);
-		value |= (pcd << 4);
-		value |= (pwt << 3);
-		value |= (us << 2);
-		value |= (wr << 1);
-		value |= p;
-#else
 		value |= p;
 		value |= (wr << 1);
 		value |= (us << 2);
@@ -172,7 +134,6 @@ struct X86PageEntry {
 		value |= (g << 8);
 		value |= (avl << 9);
 		value |= (base << 12);
-#endif
 		return value;
 	}
 };
@@ -519,4 +480,4 @@ static inline bool mem_writeq_checked(PhysPt address, uint64_t val)
 	}
 }
 
-#endif
+#endif // DOSBOX_PAGING_H

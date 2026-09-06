@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText:  2021-2025 The DOSBox Staging Team
+// SPDX-FileCopyrightText:  2021-2026 The DOSBox Staging Team
 // SPDX-FileCopyrightText:  2002-2021 The DOSBox Team
 // SPDX-License-Identifier: GPL-2.0-or-later
 
@@ -9,7 +9,6 @@
 #include <cstring>
 #include <memory>
 
-#include "config/setup.h"
 #include "cpu/cpu.h"
 #include "cpu/registers.h"
 #include "debugger/debugger.h"
@@ -249,17 +248,16 @@ static inline bool InitPage_CheckUseraccess(uint32_t u1,uint32_t u2) {
 	case ArchitectureType::Intel386Slow:
 	case ArchitectureType::Intel386Fast:
 	default:
-		return ((u1)==0) && ((u2)==0);
+		return (u1 == 0) && (u2 == 0);
 	case ArchitectureType::Intel486OldSlow:
 	case ArchitectureType::Intel486NewSlow:
 	case ArchitectureType::Pentium:
 	case ArchitectureType::PentiumMmx:
-		return ((u1)==0) || ((u2)==0);
+		return (u1 == 0) || (u2 == 0);
 	}
 }
 
-
-class InitPageHandler final : public PageHandler {
+class InitPageHandler : public PageHandler {
 public:
 	InitPageHandler() {
 		flags=PFLAG_INIT|PFLAG_NOCODE;
@@ -557,7 +555,7 @@ public:
 	}
 };
 
-class InitPageUserROHandler final : public PageHandler {
+class InitPageUserROHandler : public PageHandler {
 public:
 	InitPageUserROHandler() {
 		flags=PFLAG_INIT|PFLAG_NOCODE;
@@ -665,7 +663,7 @@ public:
 			if (!InitPageCheckPresence_CheckOnly(lin_addr,true,table,entry)) return 0;
 
 			if (InitPage_CheckUseraccess(entry.us, table.us) ||
-			    (((entry.wr == 0) || (table.wr == 0)))) {
+			    ((entry.wr == 0) || (table.wr == 0))) {
 				LOG(LOG_PAGING, LOG_NORMAL)
 				("Page access denied: cpl=%i, %x:%x:%x:%x",
 				 static_cast<int>(cpu.cpl),
@@ -715,7 +713,6 @@ public:
 		PAGING_LinkPage(lin_page,phys_page);
 	}
 };
-
 
 bool PAGING_MakePhysPage(Bitu & page) {
 	assert(page <= UINT32_MAX);
@@ -998,9 +995,10 @@ bool PAGING_Enabled()
 	return paging.enabled;
 }
 
-class PAGING final : public ModuleBase{
+class PAGING final {
 public:
-	PAGING(Section* configuration):ModuleBase(configuration){
+	PAGING()
+	{
 		/* Setup default Page Directory, force it to update */
 		paging.enabled=false;
 		PAGING_InitTLB();
@@ -1011,9 +1009,9 @@ public:
 	}
 };
 
-static std::unique_ptr<PAGING> paging_instance = nullptr;
+static std::unique_ptr<PAGING> paging_instance = {};
 
-void PAGING_Init(Section *sec)
+void PAGING_Init()
 {
-	paging_instance = std::make_unique<PAGING>(sec);
+	paging_instance = std::make_unique<PAGING>();
 }

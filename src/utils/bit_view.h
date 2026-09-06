@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText:  2022-2025 The DOSBox Staging Team
+// SPDX-FileCopyrightText:  2022-2026 The DOSBox Staging Team
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 /*
@@ -71,12 +71,6 @@ To use bit_views with larger types or registers, the type should be
 accessible in it's explicit 8-bit parts (for example, a uint32_t can be
 represented as an array of four uin8_t), each element of which can be
 assigned to a bit_view-based union.
-
-This is deliberate because the byte-ordering of the bit-view's data cannot
-be assumed. For example, the byte ordering of a 16-bit register populated
-within a DOS emulator will be little-endian, even when running on a
-big-endian host, where as native data types on big-endian hardware will be
-big-endian.
 */
 
 #ifndef BIT_VIEW_H_
@@ -87,6 +81,27 @@ big-endian.
 
 #include "utils/bitops.h"
 #include "misc/support.h"
+
+// Clang does not have -Wmaybe-uninitialized so it needs -Wunknown-warning-option
+// to supress a warning about unknown warnings.
+
+// We can't just remove the pragma clang stuff because from testing,
+// Clang accepts pragma GCC but GCC does not accept pragma clang.
+
+// Also, GCC does not have -Wunknown-warning-option,
+// so if we *only* have pragma GCC, we get warned about
+// an unkown warning that's supposed to supress unkown warnings.
+// Sheesh...
+
+// All of this is needed because "data_type data;" is explcitly left uninitialized.
+// See comment below.
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wunknown-warning-option"
+#pragma clang diagnostic ignored "-Wuninitialized"
+#pragma clang diagnostic ignored "-Wmaybe-uninitialized"
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wuninitialized"
+#pragma GCC diagnostic ignored "-Wmaybe-uninitialized"
 
 template <int view_index, int view_width>
 class bit_view {
@@ -280,5 +295,8 @@ public:
 		return static_cast<data_type>(*this);
 	}
 };
+
+#pragma GCC diagnostic pop
+#pragma clang diagnostic pop
 
 #endif

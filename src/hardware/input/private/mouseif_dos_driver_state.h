@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText:  2025-2025 The DOSBox Staging Team
+// SPDX-FileCopyrightText:  2025-2026 The DOSBox Staging Team
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #ifndef DOSBOX_MOUSEIF_DOS_DRIVER_STATE_H
@@ -6,7 +6,7 @@
 
 #include "mouse_common.h"
 
-#include "dos/dos_inc.h"
+#include "dos/dos.h"
 #include "dos/dos_windows.h"
 
 static constexpr auto MaxMouseButtons  = 3;
@@ -126,10 +126,15 @@ public:
 	void SetLastWheelMovedX(const uint16_t value);
 	void SetLastWheelMovedY(const uint16_t value);
 
-	float GetMickeyCounterX() const;
-	float GetMickeyCounterY() const;
-	void SetMickeyCounterX(const float value);
-	void SetMickeyCounterY(const float value);
+	float GetPreciseMickeyCounterX() const;
+	float GetPreciseMickeyCounterY() const;
+	void SetPreciseMickeyCounterX(const float value);
+	void SetPreciseMickeyCounterY(const float value);
+
+	int16_t GetMickeyCounterX() const;
+	int16_t GetMickeyCounterY() const;
+	void SetMickeyCounterX(const int16_t value);
+	void SetMickeyCounterY(const int16_t value);
 
 	float GetMickeysPerPixelX() const;
 	float GetMickeysPerPixelY() const;
@@ -152,9 +157,6 @@ public:
 	int16_t GetUpdateRegionY(const size_t index) const;
 	void SetUpdateRegionX(const size_t index, const int16_t value);
 	void SetUpdateRegionY(const size_t index, const int16_t value);
-
-	uint16_t GetLanguage() const;
-	void SetLanguage(const uint16_t value);
 
 	uint8_t GetBiosScreenMode() const;
 	void SetBiosScreenMode(const uint8_t value);
@@ -238,10 +240,7 @@ public:
 	void SetUserCallbackSegment(const uint16_t value);
 	void SetUserCallbackOffset(const uint16_t value);
 
-#ifdef _MSC_VER
-#pragma pack(1)
-#endif
-
+#pragma pack(push, 1)
 	struct State { // DOS driver state
 
 		// Structure containing (only!) data which should be
@@ -298,8 +297,13 @@ public:
 		uint16_t last_wheel_moved_x = 0;
 		uint16_t last_wheel_moved_y = 0;
 
-		float mickey_counter_x = 0.0f;
-		float mickey_counter_y = 0.0f;
+		// Full precision mouse mickey counters
+		float precise_mickey_counter_x = 0.0f;
+		float precise_mickey_counter_y = 0.0f;
+
+		// Counters with limited precision, as reported to guest
+		int16_t mickey_counter_x = 0;
+		int16_t mickey_counter_y = 0;
 
 		float mickeys_per_pixel_x = 0.0f;
 		float mickeys_per_pixel_y = 0.0f;
@@ -315,9 +319,6 @@ public:
 
 		int16_t update_region_x[MaxUpdateRegions] = {0};
 		int16_t update_region_y[MaxUpdateRegions] = {0};
-
-		// Language of driver messages, not used
-		uint16_t language = 0;
 
 		uint8_t bios_screen_mode = 0;
 
@@ -368,13 +369,10 @@ public:
 		uint16_t user_callback_segment = 0;
 		uint16_t user_callback_offset  = 0;
 
-	} GCC_ATTRIBUTE(packed);
+	};
+#pragma pack(pop)
 
 	static State virtual_driver_state;
-
-#ifdef _MSC_VER
-#pragma pack()
-#endif
 };
 
 #endif // DOSBOX_MOUSEIF_DOS_DRIVER_STATE_H
